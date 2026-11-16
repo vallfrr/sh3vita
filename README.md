@@ -1,5 +1,9 @@
 <p align="center">
-  <img src="docs/logo.png" alt="Silent Hill 3" width="700">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/logo.png">
+    <source media="(prefers-color-scheme: light)" srcset="docs/logo-dark.png">
+    <img alt="Silent Hill 3" src="docs/logo.png" width="700">
+  </picture>
 </p>
 
 <h3 align="center">sh3vita: Silent Hill 3 for PlayStation Vita</h3>

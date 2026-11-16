@@ -6,7 +6,7 @@
 | `bg.png` (840×500) | LiveArea background behind the button | Hero for Silent Hill 3 by Maxine, [SteamGridDB #64119](https://www.steamgriddb.com/hero/64119), cropped and resized |
 | `startup.png` (280×158) | The LiveArea start button | Logo for Silent Hill 3 by kaito, [SteamGridDB #5447](https://www.steamgriddb.com/logo/5447), on black |
 | `pic0.png` (960×544) | Launch screen: the same logo on black | same as above |
-| `../../docs/logo.png` | README banner (logo on black) | same as above |
+| `../../docs/logo.png`, `logo-dark.png` | README banner: the logo with transparent background (white, and an inverted copy for light themes) | same as above |
 | `template.xml` | LiveArea layout | this project |
 
 The images are community artwork about Silent Hill 3 gathered from SteamGridDB; the logo and the game's imagery belong to
