@@ -569,16 +569,17 @@ static uint32_t prim_verts(uint32_t type, uint32_t n) {
     default: return 0;
     }
 }
-static int diag_skip_world(Device *d) {   /* diagnostic: SH3_DIAG_SKIPCLASS bit 16 = skip draws with a cube texture bound, 32 = skip ps!=0 world draws */
+static int diag_skip_world(Device *d, uint32_t prim, uint32_t nprims) {   /* diagnostic: SH3_DIAG_SKIPCLASS bit 16 = skip draws with a cube texture bound, 32 = skip ps!=0 world draws */
     static int m=-1; if(m<0){ const char *e=getenv("SH3_DIAG_SKIPCLASS"); m=e?atoi(e):0; }
-    if(!(m&48) || !d->rt || d->rt->w!=960) return 0;
+    if(!(m&112) || !d->rt || d->rt->w!=960) return 0;
+    if((m&64) && prim==5 && nprims==2 && (d->cube[1]||d->cube[2]||d->cube[3])) return 1;   /* the lamp-only cube quads */
     if((m&16) && (d->cube[1]||d->cube[2]||d->cube[3])) return 1;
     if((m&32) && d->ps && d->vs!=0x144u) return 1;
     return 0;
 }
 M(DrawPrimitive) {
     HOSTFN; DEV;
-    if(diag_skip_world(d)) STDRET(4,HR_OK);
+    if(diag_skip_world(d,ARG(2),ARG(4))) STDRET(4,HR_OK);
     fadeseq_draw(d,"Draw",ARG(2),ARG(4));
     prep_draw(d, ARG(2), ARG(3), prim_verts(ARG(2), ARG(4)), ARG(4), NULL, 0, 0, NULL, 0);
     STDRET(4, HR_OK);
@@ -589,7 +590,7 @@ M(DrawIndexedPrimitive) {
     if (!d->ib) STDRET(6, D3DERR_INVALIDCALL);
     int i32 = d->ib->fmt_or_fvf == FMT_INDEX32;
     const uint8_t *idx = mb + d->ib->mem + start * (i32 ? 4 : 2);
-    if(diag_skip_world(d)) STDRET(6,HR_OK);
+    if(diag_skip_world(d,type,n)) STDRET(6,HR_OK);
     fadeseq_draw(d,"DrawIdx",type,n);
     prep_draw(d, type, d->base_vertex, prim_verts(type, n), n, idx, i32, minidx, NULL, 0);
     STDRET(6, HR_OK);
@@ -728,9 +729,10 @@ M(DrawPrimitiveUP) {
        a 1x1 render target, sampling the scene texture at the light position. The consumer skips this draw and emulates
        its result, so only its sample position (from the vertex uv) is passed along, for this draw only. */
     { static int skipm=-1; if(skipm<0){ const char *e=getenv("SH3_DIAG_SKIPCLASS"); skipm=e?atoi(e):0; }
-      if(skipm && d->rt && d->rt->w==960 && d->tex[0] && (((d->rs[27] && d->rs[19]==5 && d->rs[20]==2) || (skipm&16)))) {
+      if(skipm && d->rt && d->rt->w==960 && d->tex[0] && (((d->rs[27] && d->rs[19]==5 && d->rs[20]==2) || (skipm&(16|128))))) {
           int cls=0;
-          if(d->vs==0x144u && d->tex[0]->w==128) cls=1;
+          if(d->vs==0x104u && d->tex[0]->w==256 && d->rt->w==960) cls=128;   /* bloom composite 256 -> scene */
+          else if(d->vs==0x144u && d->tex[0]->w==128) cls=1;
           else if(d->vs==0x144u && d->tex[0]->w==512) cls=2;
           else if(d->vs==0x104u && d->tex[0]->w==128) cls=4;
           if(d->cube[3]||d->cube[2]||d->cube[1]) cls|=16;

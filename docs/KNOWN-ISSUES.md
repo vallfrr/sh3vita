@@ -6,7 +6,7 @@ State of the PS Vita build, version 0.1.0 (November 2026). "Console" means seen 
 
 | Issue | Notes |
 |---|---|
-| Flashlight glow and lens flares missing | The soft glow around Heather and the halos around lamps (visible on the PC) are not rendered. The game draws them with the right state and data; on the Vita nothing appears. A related lens-visibility probe is bypassed on purpose (it forced a slow GPU readback every frame). Under investigation. |
+| Flashlight glow and lens flares missing | **Not resolved, purely cosmetic.** The soft glow around Heather and the halos around lamps (visible on the PC) are not rendered; the scene stays readable and playable, and there is no black square. It no longer costs any frame rate: the game's lens-visibility probe (a render-target switch and GPU readback every frame) is bypassed on purpose. The missing glow is probably the game's bloom pass (a blurred 256×256 copy of the image added back to the scene), which produces nothing on the Vita; the cause is still being investigated. |
 | Frame rate depends on the area | The game adapts its logic step to the frame time: 60, 30 or 20 Hz. Measured on the console: about 38 fps in the lightest rooms, 25–30 fps in most areas, 17–21 fps in the church, hospital back rooms, parts of the amusement park and the sewers. |
 | Memory is tight in very long sessions | The guest heap fragments over many zone changes; allocation failures were seen after dozens of consecutive zone changes. Save regularly. |
 | First launch stutters | Shaders are compiled on the console the first time they are needed. A compiled-shader cache shipped in the VPK covers many of them, and what is compiled is kept in `ux0:data/sh3/cache/`. |
