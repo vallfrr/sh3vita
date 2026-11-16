@@ -1,0 +1,112 @@
+name: sh3prep
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+    paths: ["tools/sh3prep/**", ".github/workflows/sh3prep.yml"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - { os: windows-latest, bin: sh3prep.exe, name: sh3prep-windows.exe, artifact: sh3prep-windows, ffmpeg: ffmpeg-win32-x64.gz, ffmpeg_sha: 8883a3dffbd0a16cf4ef95206ea05283f78908dbfb118f73c83f4951dcc06d77 }
+          - { os: macos-latest, bin: sh3prep, name: sh3prep-macos, artifact: sh3prep-macos, ffmpeg: ffmpeg-darwin-arm64.gz, ffmpeg_sha: 8923876afa8db5585022d7860ec7e589af192f441c56793971276d450ed3bbfa }
+          - { os: ubuntu-latest, bin: sh3prep, name: sh3prep-linux, artifact: sh3prep-linux, ffmpeg: ffmpeg-linux-x64.gz, ffmpeg_sha: bfe8a8fc511530457b528c48d77b5737527b504a3797a9bc4866aeca69c2dffa }
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: tools/sh3prep
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libxkbcommon-dev libwayland-dev
+      # FFmpeg is embedded in the binary so that players need nothing else. Static GPL builds (libx264, AAC) from
+      # eugeneware/ffmpeg-static release b6.1.1, pinned by SHA-256 (the build fails if the file differs).
+      - name: Fetch the pinned FFmpeg build to embed
+        shell: bash
+        run: |
+          mkdir -p ffmpeg
+          curl -fsSL -o ffmpeg/ffmpeg.gz "https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/${{ matrix.ffmpeg }}"
+          echo "${{ matrix.ffmpeg_sha }}  ffmpeg/ffmpeg.gz" > ffmpeg/ffmpeg.gz.sha256
+          (sha256sum -c ffmpeg/ffmpeg.gz.sha256 2>/dev/null || shasum -a 256 -c ffmpeg/ffmpeg.gz.sha256)
+      - run: cargo test --release
+      - run: cargo build --release
+      - run: mv target/release/${{ matrix.bin }} ${{ matrix.name }}
+
+      # macOS: a double-clickable .app (zipped), next to the plain command-line binary.
+      - name: Package macOS app
+        if: matrix.os == 'macos-latest'
+        run: |
+          APP=sh3prep.app
+          mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+          cp sh3prep-macos "$APP/Contents/MacOS/sh3prep"
+          sips -s format icns ../../port/livearea/icon0.png --out "$APP/Contents/Resources/AppIcon.icns"
+          cat > "$APP/Contents/Info.plist" <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleName</key><string>sh3prep</string>
+            <key>CFBundleDisplayName</key><string>sh3prep</string>
+            <key>CFBundleIdentifier</key><string>io.github.vallfrr.sh3prep</string>
+            <key>CFBundleExecutable</key><string>sh3prep</string>
+            <key>CFBundleIconFile</key><string>AppIcon</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>CFBundleShortVersionString</key><string>0.1.0</string>
+            <key>LSMinimumSystemVersion</key><string>11.0</string>
+            <key>NSHighResolutionCapable</key><true/>
+          </dict>
+          </plist>
+          PLIST
+          codesign --force --deep -s - "$APP"
+          ditto -c -k --keepParent "$APP" sh3prep-macos-app.zip
+
+      # Linux: an AppImage (wraps the same binary; it does not bundle system libraries).
+      - name: Package Linux AppImage
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          mkdir -p AppDir/usr/bin
+          cp sh3prep-linux AppDir/usr/bin/sh3prep
+          cp ../../port/livearea/icon0.png AppDir/sh3prep.png
+          cat > AppDir/sh3prep.desktop <<'DESKTOP'
+          [Desktop Entry]
+          Type=Application
+          Name=sh3prep
+          Comment=Prepare the Silent Hill 3 files for the PS Vita port
+          Exec=sh3prep
+          Icon=sh3prep
+          Categories=Utility;
+          Terminal=false
+          DESKTOP
+          printf '#!/bin/sh\nexec "$(dirname "$(readlink -f "$0")")/usr/bin/sh3prep" "$@"\n' > AppDir/AppRun
+          chmod +x AppDir/AppRun
+          curl -fsSL -o appimagetool https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage
+          chmod +x appimagetool
+          ARCH=x86_64 ./appimagetool --appimage-extract-and-run AppDir sh3prep-linux-x86_64.AppImage
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            tools/sh3prep/${{ matrix.name }}
+            tools/sh3prep/sh3prep-macos-app.zip
+            tools/sh3prep/sh3prep-linux-x86_64.AppImage
+          if-no-files-found: ignore
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*

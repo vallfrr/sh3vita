@@ -1,0 +1,310 @@
+--- a/source/framebuffers.c
++++ b/source/framebuffers.c
+@@ -198,6 +198,40 @@
+  * ------------------------------
+  */
+ 
++static void release_renderbuffer(renderbuffer *rb) {
++	if (!rb || !rb->deleted || rb->references) return;
++#ifndef DEPTH_STENCIL_HACK
++	if (rb->depth_ready) {
++		if (rb->depthbuffer.depthData) mark_as_dirty(rb->depthbuffer.depthData);
++		if (rb->depthbuffer.stencilData) mark_as_dirty(rb->depthbuffer.stencilData);
++	}
++#endif
++	rb->depth_ready = GL_FALSE;
++	rb->active = GL_FALSE;
++}
++static void attach_renderbuffer(framebuffer *fb, renderbuffer *rb) {
++	if (fb->depth_rb == rb) return;
++	_vglDiscardPrivateDepth(fb);
++	renderbuffer *old = fb->depth_rb;
++	fb->depth_rb = rb;
++	if (rb) rb->references++;
++	if (old) { old->references--; release_renderbuffer(old); }
++	fb->depthbuffer_state = rb && rb->wants_stencil ? DEPTHBUFFER_WANTS_STENCIL : DEPTHBUFFER_MISSING;
++}
++static void renderbuffer_storage(renderbuffer *rb, GLenum format, GLsizei width, GLsizei height) {
++	for (int i = 0; i < BUFFERS_NUM; i++)
++		if (framebuffers[i].active && framebuffers[i].depth_rb == rb) _vglDiscardPrivateDepth(&framebuffers[i]);
++#ifndef DEPTH_STENCIL_HACK
++	if (rb->depth_ready) {
++		if (rb->depthbuffer.depthData) mark_as_dirty(rb->depthbuffer.depthData);
++		if (rb->depthbuffer.stencilData) mark_as_dirty(rb->depthbuffer.stencilData);
++	}
++#endif
++	rb->depth_ready = GL_FALSE;
++	rb->width = width; rb->height = height;
++	rb->wants_stencil = format == GL_STENCIL_INDEX8 || format == GL_DEPTH24_STENCIL8 || format == GL_DEPTH32F_STENCIL8;
++}
++
+ inline __attribute__((always_inline)) void glGenFramebuffers(GLsizei n, GLuint *ids) {
+ 	THREAD_SAFE()
+ 
+@@ -215,6 +249,7 @@
+ 			framebuffers[i].active = GL_TRUE;
+ 			framebuffers[i].depthbuffer_state = DEPTHBUFFER_MISSING;
+ 			framebuffers[i].depthbuffer_ptr = NULL;
++			framebuffers[i].depth_rb = NULL;
+ 			framebuffers[i].target = NULL;
+ 			framebuffers[i].tex = NULL;
+ 		}
+@@ -241,6 +276,7 @@
+ 	for (i = 0; i < BUFFERS_NUM; i++) {
+ 		if (!renderbuffers[i].active) {
+ 			ids[j++] = (GLuint)&renderbuffers[i];
++			memset(&renderbuffers[i], 0, sizeof(renderbuffers[i]));
+ 			renderbuffers[i].active = GL_TRUE;
+ 			renderbuffers[i].wants_stencil = GL_FALSE;
+ 		}
+@@ -279,11 +315,8 @@
+ 			if (fb->target) {
+ 				mark_rt_as_dirty(fb->target);
+ 			}
+-#ifndef DEPTH_STENCIL_HACK
+-			if (fb->depthbuffer_ptr) {
+-				mark_as_dirty(fb->depthbuffer_ptr->depthData);
+-			}
+-#endif
++			_vglDiscardPrivateDepth(fb);
++			attach_renderbuffer(fb, NULL);
+ 		}
+ 	}
+ }
+@@ -299,7 +332,9 @@
+ 	while (n > 0) {
+ 		renderbuffer *rb = (renderbuffer *)ids[--n];
+ 		if (rb) {
+-			rb->active = GL_FALSE;
++			rb->deleted = GL_TRUE;
++			if (active_rb == rb) active_rb = NULL;
++			release_renderbuffer(rb);
+ 		}
+ 	}
+ }
+@@ -362,19 +397,11 @@
+ 	}
+ #endif
+ 
+-	// Discarding any previously bound hidden depth buffers
+-	if (fb->depthbuffer_ptr) {
+-#ifndef DEPTH_STENCIL_HACK
+-		mark_as_dirty(fb->depthbuffer_ptr->depthData);
+-#endif
+-	}
+-	fb->depthbuffer_ptr = NULL;
+-
+ 	switch (attachment) {
+ 	case GL_DEPTH_STENCIL_ATTACHMENT:
+ 	case GL_DEPTH_ATTACHMENT:
+ 	case GL_STENCIL_ATTACHMENT:
+-		fb->depthbuffer_state = (rb && ((renderbuffer *)rb)->wants_stencil) ? DEPTHBUFFER_WANTS_STENCIL : DEPTHBUFFER_MISSING;
++		attach_renderbuffer(fb, (renderbuffer *)rb);
+ 		break;
+ 	default:
+ 		SET_GL_ERROR_WITH_VALUE(GL_INVALID_ENUM, attachment)
+@@ -394,19 +421,11 @@
+ 
+ 	framebuffer *fb = (framebuffer *)target;
+ 
+-	// Discarding any previously bound hidden depth buffers
+-	if (fb->depthbuffer_ptr) {
+-#ifndef DEPTH_STENCIL_HACK
+-		mark_as_dirty(fb->depthbuffer_ptr->depthData);
+-#endif
+-		fb->depthbuffer_ptr = NULL;
+-	}
+-
+ 	switch (attachment) {
+ 	case GL_DEPTH_STENCIL_ATTACHMENT:
+ 	case GL_DEPTH_ATTACHMENT:
+ 	case GL_STENCIL_ATTACHMENT:
+-		fb->depthbuffer_state = (rb && ((renderbuffer *)rb)->wants_stencil) ? DEPTHBUFFER_WANTS_STENCIL : DEPTHBUFFER_MISSING;
++		attach_renderbuffer(fb, (renderbuffer *)rb);
+ 		break;
+ 	default:
+ 		SET_GL_ERROR_WITH_VALUE(GL_INVALID_ENUM, attachment)
+@@ -429,8 +448,6 @@
+ 	case GL_STENCIL_INDEX8:
+ 	case GL_DEPTH24_STENCIL8:
+ 	case GL_DEPTH32F_STENCIL8:
+-		active_rb->wants_stencil = GL_TRUE;
+-		break;
+ 	case GL_DEPTH_COMPONENT:
+ 	case GL_DEPTH_COMPONENT16:
+ 	case GL_DEPTH_COMPONENT24:
+@@ -440,6 +457,7 @@
+ 	default:
+ 		SET_GL_ERROR_WITH_VALUE(GL_INVALID_ENUM, internalformat)
+ 	}
++	renderbuffer_storage(active_rb, internalformat, width, height);
+ }
+ 
+ void glNamedRenderbufferStorage(GLuint target, GLenum internalformat, GLsizei width, GLsizei height) {
+@@ -449,8 +467,6 @@
+ 	switch (internalformat) {
+ 	case GL_DEPTH24_STENCIL8:
+ 	case GL_DEPTH32F_STENCIL8:
+-		rb->wants_stencil = GL_TRUE;
+-		break;
+ 	case GL_DEPTH_COMPONENT:
+ 	case GL_DEPTH_COMPONENT16:
+ 	case GL_DEPTH_COMPONENT24:
+@@ -460,6 +476,7 @@
+ 	default:
+ 		SET_GL_ERROR_WITH_VALUE(GL_INVALID_ENUM, internalformat)
+ 	}
++	renderbuffer_storage(rb, internalformat, width, height);
+ }
+ 
+ inline void glFramebufferTexture2D(GLenum target, GLenum attachment, GLenum textarget, GLuint tex_id, GLint level) {
+@@ -963,7 +980,7 @@
+ 
+ GLboolean glIsRenderbuffer(GLuint rb) {
+ 	renderbuffer *p = (renderbuffer *)rb;
+-	return (p && p->active);
++	return (p && p->active && !p->deleted);
+ }
+ 
+ void glReadBuffer(GLenum mode) {
+--- a/source/gxm.c
++++ b/source/gxm.c
+@@ -23,6 +23,9 @@
+ 
+ #include "shared.h"
+ 
++static int last_scene_error;
++int vglGetLastSceneError(void) { int error = last_scene_error; last_scene_error = 0; return error; }
++
+ #define MAX_SCENES_PER_FRAME 8 // Maximum amount of scenes per frame allowed by sceGxm per render target
+ 
+ // FIXME: Since we use our own default uniform buffers circular pool, fragment and vertex buffer rings can likely be reduced in size
+@@ -621,6 +624,7 @@
+ 				gxm_sync_objects[gxm_back_buffer_index],
+ 				&gxm_color_surfaces[gxm_back_buffer_index],
+ 				&gxm_depth_stencil_surface);
++			if (r) last_scene_error = r;
+ #ifdef LOG_ERRORS
+ 			if (r) {
+ 				vgl_log("%s:%d Scene reset failed due to sceGxmBeginScene erroring (%s) on display.\n", __FILE__, __LINE__, get_gxm_error_literal(r));
+@@ -634,8 +638,26 @@
+ 			
+ 			// If the depthbuffer is dirty, we re-gen it
+ 			if (!(active_write_fb->depthbuffer_state & DEPTHBUFFER_READY)) {
+-				init_depth_stencil_buffer(active_write_fb->width, active_write_fb->height, &active_write_fb->depthbuffer, active_write_fb->depthbuffer_state == DEPTHBUFFER_WANTS_STENCIL);
+-				active_write_fb->depthbuffer_ptr = &active_write_fb->depthbuffer;
++				renderbuffer *rb = active_write_fb->depth_rb;
++				if (rb && rb->width >= active_write_fb->width && rb->height >= active_write_fb->height) {
++					if (!rb->depth_ready) {
++						init_depth_stencil_buffer(rb->width, rb->height, &rb->depthbuffer, rb->wants_stencil);
++						rb->depth_ready = GL_TRUE;
++					}
++					active_write_fb->depthbuffer_ptr = &rb->depthbuffer;
++				} else {
++					// Keep a private surface for unattached or undersized RBOs (legacy compatibility).
++					init_depth_stencil_buffer(active_write_fb->width, active_write_fb->height, &active_write_fb->depthbuffer, rb ? rb->wants_stencil : active_write_fb->depthbuffer_state == DEPTHBUFFER_WANTS_STENCIL);
++					active_write_fb->depthbuffer_ptr = &active_write_fb->depthbuffer;
++#ifdef STORE_DEPTH_STENCIL
++                    // An unattached FBO has no logical depth/stencil attachment.
++                    // Keep the fallback memory for internal partial rendering.
++                    if (!rb && getenv("SH3_PRIVATE_DEPTH_DISCARD")) {
++                        sceGxmDepthStencilSurfaceSetForceLoadMode(active_write_fb->depthbuffer_ptr, SCE_GXM_DEPTH_STENCIL_FORCE_LOAD_DISABLED);
++                        sceGxmDepthStencilSurfaceSetForceStoreMode(active_write_fb->depthbuffer_ptr, SCE_GXM_DEPTH_STENCIL_FORCE_STORE_DISABLED);
++                    }
++#endif
++				}
+ 				active_write_fb->depthbuffer_state |= DEPTHBUFFER_READY;
+ 			}
+ 
+@@ -673,6 +695,7 @@
+ 					NULL, NULL, NULL,
+ 					&active_write_fb->colorbuffer,
+ 					active_write_fb->depthbuffer_ptr);
++			if (r) last_scene_error = r;
+ #ifdef LOG_ERRORS
+ 			if (r)
+ 				vgl_log("%s:%d Scene reset failed due to sceGxmBeginScene erroring (%s) on framebuffer 0x%08X.\n", __FILE__, __LINE__, get_gxm_error_literal(r), active_write_fb);
+--- a/source/shared.h
++++ b/source/shared.h
+@@ -591,6 +591,14 @@
+ 	DEPTHBUFFER_READY
+ };
+ 
++// Renderbuffers own their depth/stencil storage; attachments may share it across colour targets.
++typedef struct {
++	GLboolean active, wants_stencil, deleted, depth_ready;
++	unsigned references;
++	GLsizei width, height;
++	SceGxmDepthStencilSurface depthbuffer;
++} renderbuffer;
++
+ // Framebuffer struct
+ typedef struct {
+ 	GLboolean active;
+@@ -600,6 +608,7 @@
+ 	SceGxmColorSurface colorbuffer;
+ 	SceGxmDepthStencilSurface depthbuffer;
+ 	SceGxmDepthStencilSurface *depthbuffer_ptr;
++	renderbuffer *depth_rb;
+ 	SceGxmTextureFormat format;
+ 	int width;
+ 	int height;
+@@ -615,11 +624,6 @@
+ 	uint8_t id;
+ } query;
+ 
+-// Renderbuffer struct
+-typedef struct {
+-	GLboolean active;
+-	GLboolean wants_stencil;
+-} renderbuffer;
+ 
+ // Sampler object struct
+ typedef struct {
+@@ -1328,6 +1332,18 @@
+ 	}
+ }
+ 
++// Only private fallback storage belongs to the FBO. Shared RBO storage survives target changes.
++static inline void _vglDiscardPrivateDepth(framebuffer *fb) {
++#ifndef DEPTH_STENCIL_HACK
++	if (fb->depthbuffer_ptr == &fb->depthbuffer) {
++		if (fb->depthbuffer.depthData) mark_as_dirty(fb->depthbuffer.depthData);
++		if (fb->depthbuffer.stencilData) mark_as_dirty(fb->depthbuffer.stencilData);
++	}
++#endif
++	fb->depthbuffer_ptr = NULL;
++	fb->depthbuffer_state &= ~DEPTHBUFFER_READY;
++}
++
+ static inline __attribute__((always_inline)) void _glFramebufferTexture2D(framebuffer *fb, GLenum attachment, texture *tex, GLuint tex_id) {
+ 	// Extracting texture data
+ 	int old_w = fb->width, old_h = fb->height;
+@@ -1362,13 +1378,7 @@
+ 				mark_rt_as_dirty(fb->target);
+ 				fb->target = NULL;
+ 			}
+-			if (fb->depthbuffer_ptr) {
+-#ifndef DEPTH_STENCIL_HACK
+-				mark_as_dirty(fb->depthbuffer_ptr->depthData);
+-#endif
+-				fb->depthbuffer_ptr = NULL;
+-				fb->depthbuffer_state &= ~DEPTHBUFFER_READY;
+-			}
++			_vglDiscardPrivateDepth(fb);
+ 		}
+ 
+ 		// Increasing texture reference counter
+--- a/source/textures.c
++++ b/source/textures.c
+@@ -1827,9 +1827,7 @@
+ 						if (fb) {
+ 							gpu_free_texture(&texture_slots[i]);
+ 							if (fb->depthbuffer_ptr) {
+-								mark_as_dirty(fb->depthbuffer_ptr->depthData);
+-								fb->depthbuffer_ptr = NULL;
+-								fb->depthbuffer_state = DEPTHBUFFER_MISSING;
++								_vglDiscardPrivateDepth(fb);
+ 							}
+ 							if (fb->target) {
+ 								mark_rt_as_dirty(fb->target);

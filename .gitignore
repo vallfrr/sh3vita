@@ -1,0 +1,31 @@
+# Game files: never in the repository
+game/
+*.exe
+*.dll
+*.arc
+*.afs
+*.000
+*.mpg
+*.mp4
+*.iso
+
+# C code generated from the game binary (derived work, never versioned)
+port/gen/
+
+# Ghidra project and analysis output
+re/ghidra/*
+!re/ghidra/ExportFunctions.java
+re/out/
+
+# Local tools and caches
+.venv/
+tools/sh3prep/target/
+tools/sh3prep/ffmpeg/
+__pycache__/
+
+# Builds and console exports
+build/
+*.vpk
+*.velf
+*.self
+eboot.bin
