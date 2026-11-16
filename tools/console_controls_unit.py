@@ -19,6 +19,8 @@ SIGNATURES = {
  '0060cc90': '2acac29ace4a757b68e451906e7d315f52db8ea7ea2cc216874bed184d3c5178',
  '005e3f90': '1ba46c9f6510ef2adcabb37f370b25b5c72bb6770f4ea366ac8f77f540b5e01b',
  '005e3560': '2320276a5c8c6a2a2c719488e9899d628f4e6cc5df2836c31a032c10773ad5e5',
+ '005e8270': '2e289bec861f7e64814b6351b094d7ca48b4bc0135b17b81ab74dc995334aaa0',
+ '005e88b0': '4760372a49d4075a74e02fff64a16542b9857f3cbb47ead8a0780a6d3e1baa80',
  '005e35e0': '6985c5a61fce46804fa7f1c16db7dcd066082640af964e61f45c66575dd75d39',
 }
 PAGE_BODY = """  /* Two pages only (Main <-> Extra): the PC Configuration page is retired, its Gamma row sits on page 1. */
@@ -80,6 +82,21 @@ def replace(source):
      g_mem[0xbcc178u]==26u || g_mem[0xbcc178u]==27u)
     g_mem[0xbcc178u]=g_mem[0xbcc179u]=25u;
 ''',1)
+        elif name=='005e88b0':
+            # Pause menu: the 4th entry (Inventory, reachable with Triangle anyway) opens Options (state 0xe), like the inventory's own Options button.
+            old='  // 0x5e8b78: push 6\n  { uint32_t v=0x6u; esp-=4; W32(esp,v); }'
+            assert body.count(old)==1
+            body=body.replace(old,'  // 0x5e8b78: push 0xe (Options), return flag F_005e3110: 2 = back to the game on exit (1 = inventory, 0 = title)\n  g_mem[0xbcc17du]=2; sh3_pause_reopen=45; sh3_pause_cursor=3u; { uint32_t v=0xeu; esp-=4; W32(esp,v); }')
+        elif name=='005e8270':
+            # Per-frame pause opener: back from Options (see 005e88b0), reopen the pause menu with the cursor on Options.
+            needle='  // 0x5e828d: call 0x5f1320'
+            assert body.count(needle)==1
+            body=body.replace(needle,'  if(sh3_pause_reopen && --sh3_pause_reopen==0){ goto L_005e82a4; }\n'+needle)
+            old='  W32((uint32_t)(0xbcc210u),0x0u);'
+            assert body.count(old)==1
+            body=body.replace('  // 0x5e82a4: mov eax, 1','L_005e82a4:;\n  // 0x5e82a4: mov eax, 1')
+            body=body.replace(old,'  W32((uint32_t)(0xbcc210u),sh3_pause_cursor); sh3_pause_cursor=0;')
+            body='static int sh3_pause_reopen; static uint32_t sh3_pause_cursor;\n'+body
         elif name=='005e2300':
             needle='  // 0x5e24b4: fild dword ptr [esp + 0x28]'
             assert body.count(needle)==1
@@ -102,7 +119,7 @@ def replace(source):
         found+=1
     if found not in (1,2,3,6,7,10): raise ValueError('Missing native controls/display functions')
     if 'void F_005e2300(' in source:
-        source='#include <stdint.h>\nextern int diag_console_display_mode(uint32_t w,uint32_t h);\n'+source
+        source='#include <stdint.h>\n#include <stdlib.h>\nextern int diag_console_display_mode(uint32_t w,uint32_t h);\n'+source
     return source
 if __name__=='__main__':
     p=argparse.ArgumentParser(description=__doc__)

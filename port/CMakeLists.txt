@@ -229,7 +229,7 @@ if(SH3_CRT_COPY_JUMPS)
 endif()
 option(SH3_CONSOLE_CONTROLS "Fixed native Type3D movement, no 2D selector" ON)
 if(SH3_CONSOLE_CONTROLS)
-  foreach(CONTROL_INDEX 129 132 133 134 147)
+  foreach(CONTROL_INDEX 129 132 133 134 135 147)
     set(SH3_CONTROL_UNIT "${CMAKE_CURRENT_BINARY_DIR}/console-controls/x86_f${CONTROL_INDEX}.c")
     execute_process(COMMAND "${Python3_EXECUTABLE}" "${SH3_ROOT}/tools/console_controls_unit.py"
       "${SH3_GEN_DIR}/x86_f${CONTROL_INDEX}.c" "${SH3_CONTROL_UNIT}" RESULT_VARIABLE CONTROL_RESULT)

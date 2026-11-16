@@ -47,6 +47,20 @@ uint32_t diag_console_pause_message(uint32_t p,uint32_t caller) {
     }
     if(caller!=0x5e8977u && caller!=0x5e8479u)return p;
     if(!p || (uint64_t)p+32>g_mem_size)return p;
+    {   /* Pause entry 4 opens Options instead of the Inventory (Triangle still opens it): relabel it. */
+        static const char *const inv[]={"Inventory","Inventaire","Inventar","Inventario"};
+        static const char *const opt[]={"Options","Options","Optionen","Opzioni","Opciones"};
+        static uint32_t cached[5];
+        char t[16]; unsigned n=0,off=g_mem[p]==0 && g_mem[p+1]==0x80?2:0;
+        while(n<15){unsigned ch=g_mem[p+off+n];if(ch==0xff||!ch)break;t[n++]=(char)(ch+0x20);}
+        t[n]=0;
+        for(unsigned i=0;i<4;i++) if(!strcmp(t,inv[i])) {
+            unsigned lang=g_mem[0x70e66b1u];lang=lang>=1 && lang<=5?lang-1:0;
+            if(!cached[lang]){const char *s=opt[lang];size_t k=strlen(s);uint32_t q=gheap_alloc((uint32_t)k+4u);if(!q)return p;
+                g_mem[q]=0;g_mem[q+1]=0x80;for(size_t j=0;j<k;j++)g_mem[q+2+j]=(uint8_t)s[j]-0x20;g_mem[q+k+2]=g_mem[q+k+3]=0xff;cached[lang]=q;}
+            return cached[lang];
+        }
+    }
     /* Native message format observed on this PE: 0x8000 prefix, Latin
        ASCII minus 0x20 bytes, 0xffff terminator (not a UTF-16 string). */
     static const uint8_t old[]={0x00,0x80,0x23,0x45,0x53,0x53,0x45,0x52,0xff,0xff};
