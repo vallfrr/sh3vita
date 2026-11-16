@@ -1,4 +1,8 @@
-<h1 align="center">sh3vita: Silent Hill 3 for PlayStation Vita</h1>
+<p align="center">
+  <img src="docs/logo.png" alt="Silent Hill 3" width="700">
+</p>
+
+<h3 align="center">sh3vita: Silent Hill 3 for PlayStation Vita</h3>
 
 <p align="center">
   An experimental port of the 2003 PC version of Silent Hill 3, built by static recompilation.<br>
