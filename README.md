@@ -96,7 +96,7 @@ The preparer rejects unsupported game executables (wrong versions or PS2 files).
 
 The first launch compiles some shaders on the console, so the first minutes can stutter more than later runs.
 
-Saves and settings go in `ux0:data/sh3/savedata/`. The current log is `ux0:data/sh3/diag/diag.log`; the previous launch is kept as `diag-prev.log`.
+Saves and settings go in `ux0:data/sh3/savedata/`. The current log is `ux0:data/sh3/diag/diag.log`; the 10 previous launches are kept as `diag-1.log` (latest) to `diag-10.log`.
 
 ### Updating
 
@@ -116,9 +116,7 @@ The button layout is fixed (no remapping). You can review it at any time in-game
 |:--|:--|
 | **Left stick** | Move |
 | **Right stick** | Look around |
-| **D-pad ↑** | Flashlight |
-| **D-pad ↓** | Zoom |
-| **D-pad ← / →** | Move left / right |
+| **D-pad** | Same as the left stick (move, menus, puzzle pointer) |
 | **L** | Look around (search view) |
 | **R** | Aim |
 
@@ -173,7 +171,7 @@ More details: [docs/KNOWN-ISSUES.md](docs/KNOWN-ISSUES.md).
 | "SHADER COMPILER MISSING" | Put `libshacccg.suprx` in `ur0:data/` (install it with [ShaRKF00D](https://github.com/Rinnegatamante/ShaRKF00D)). |
 | `sh3prep` rejects the exe | Wrong game version. You need the `sh3.exe` with the SHA-256 above. |
 | Movies are choppy (about 20 fps) | They were not converted to MP4. Prepare the files again with `sh3prep` (ffmpeg is built in). |
-| Crash or the game closes | Open an issue and attach `ux0:data/sh3/diag/diag.log` (and `diag-prev.log` if you restarted the game since). |
+| Crash or the game closes | Open an issue and attach `ux0:data/sh3/diag/diag.log` and the `diag-1.log` ... `diag-10.log` files of the sessions where it happened. |
 
 ## Build from source
 

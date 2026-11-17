@@ -430,7 +430,7 @@ static char *ffp_vs(uint32_t fvf) {
         cat(&s, "  float w = aV0.w == 0.0 ? 1.0 : 1.0 / aV0.w;\n"
                 "  gl_Position = vec4(((aV0.x + 0.5 - uVp.x) / uVp.z) * 2.0 - 1.0,\n"
                 "                     (1.0 - ((aV0.y + 0.5 - uVp.y) / uVp.w) * 2.0) * uFlip.x,\n"
-                "                     aV0.z * 2.0 - 1.0, 1.0) * w;\n");
+                "                     clamp(aV0.z, 0.0, 1.0) * 2.0 - 1.0, 1.0) * w;\n");   // D3D clamps RHW depth to [0,1]; the map's player arrow has z=1.00001 and GL clipped it
     else // XYZ: world*view*projection (rows of c[0..3], D3D row-vector convention)
         cat(&s, "  vec4 p = vec4(aV0.xyz, 1.0);\n"
                 "  vec4 q = vec4(dot(p, c[0]), dot(p, c[1]), dot(p, c[2]), dot(p, c[3]));\n"

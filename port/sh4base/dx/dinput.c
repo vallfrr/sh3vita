@@ -183,6 +183,11 @@ M(dev, GetDeviceState) {
         /* Cursor screens (puzzles...): while the left stick drives the virtual mouse (diag_runtime.c) it must not also press the
            move keys, and Cross is the mouse click, not Enter/Space (otherwise the confirmation would fire twice). */
         extern int diag_vcursor_stick_mode(void);
+        /* The D-pad does exactly what the left stick does, everywhere (checked on a PS2, Valentin 2026-11-17). */
+        if(pad.buttons&SCE_CTRL_LEFT)pad.lx=0;
+        if(pad.buttons&SCE_CTRL_RIGHT)pad.lx=255;
+        if(pad.buttons&SCE_CTRL_UP)pad.ly=0;
+        if(pad.buttons&SCE_CTRL_DOWN)pad.ly=255;
         const int cursor_mode=diag_vcursor_stick_mode();
         if(cursor_mode) pad.lx=pad.ly=128;
         uint32_t main_state=R32(0xbcc660u);
@@ -205,18 +210,14 @@ M(dev, GetDeviceState) {
             if(pad.rx>192)VKEY(0xcd);
             if(pad.ry<64)VKEY(0xc8);
             if(pad.ry>192)VKEY(0xd0);
-            if(pad.buttons&SCE_CTRL_UP)VKEY(0x26);   /* flashlight */
-            if(pad.buttons&SCE_CTRL_DOWN)VKEY(0x2c); /* native zoom, Z */
-            if(pad.buttons&SCE_CTRL_LEFT)VKEY(0x10);   /* Type2D left (A/D side steps do nothing in 2D) */
-            if(pad.buttons&SCE_CTRL_RIGHT)VKEY(0x12);  /* Type2D right */
         } else {
             /* Menus read the arrow keys AND the native Type3D keys W/S/Q/E (0x11/0x1f/0x10/0x12): the bench key
                injection (PAD_UP/DOWN/LEFT/RIGHT) sends both and navigates; arrows alone left the inventory
                cursor stuck on its tab bar (state 6, 2026-11-16). Menu states only: gameplay keeps its own map. */
-            if((pad.buttons&SCE_CTRL_UP) || pad.ly<64){VKEY(0xc8);VKEY(0x11);}
-            if((pad.buttons&SCE_CTRL_DOWN) || pad.ly>192){VKEY(0xd0);VKEY(0x1f);}
-            if((pad.buttons&SCE_CTRL_LEFT) || pad.lx<64){VKEY(0xcb);VKEY(0x10);}
-            if((pad.buttons&SCE_CTRL_RIGHT) || pad.lx>192){VKEY(0xcd);VKEY(0x12);}
+            if(pad.ly<64){VKEY(0xc8);VKEY(0x11);}
+            if(pad.ly>192){VKEY(0xd0);VKEY(0x1f);}
+            if(pad.lx<64){VKEY(0xcb);VKEY(0x10);}
+            if(pad.lx>192){VKEY(0xcd);VKEY(0x12);}
         }
 #undef VKEY
         if ((pad.buttons&SCE_CTRL_CROSS) && !cursor_mode) { if (n>0x1c) W8(p+0x1c,0x80); }

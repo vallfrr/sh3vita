@@ -7,6 +7,7 @@ only while this function runs, see diag_runtime.c (diag_cursor_ui_tick / GetCurs
 import argparse, hashlib, re
 from pathlib import Path
 SHA = '658c9c4a4784148e1e36799dcaed4d034274196f437d17e834774f6314524b8a'
+PICTURE_SHA = '7ad6c01c9eb38e736dc9460cc88b4f54911ffe7c2ecd3d69c4acbb3aad69bcae'
 
 
 def generate(source):
@@ -14,7 +15,14 @@ def generate(source):
     if not m or hashlib.sha256(m[0].encode()).hexdigest() != SHA:
         raise ValueError('Cursor update function changed: F_004dd130')
     body = m[0].replace('{\n', '{\n  diag_cursor_ui_tick();\n', 1)
-    return 'extern void diag_cursor_ui_tick(void);\n' + source[:m.start()] + body + source[m.end():]
+    source = source[:m.start()] + body + source[m.end():]
+    # The game's 2D picture call: its caller tells the widescreen hook when a picture viewer (puzzle, document) is on screen.
+    p = re.search(r'void F_004dc770\(CPU \*c\) \{.*?\n\}', source, re.S)
+    if not p or hashlib.sha256(p[0].encode()).hexdigest() != PICTURE_SHA:
+        raise ValueError('Picture function changed: F_004dc770')
+    body = p[0].replace('{\n', '{\n  diag_picture_note(c->esp);\n', 1)
+    return ('extern void diag_cursor_ui_tick(void);\nextern void diag_picture_note(unsigned);\n' +
+            source[:p.start()] + body + source[p.end():])
 
 
 if __name__ == '__main__':

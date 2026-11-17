@@ -329,6 +329,7 @@ M(GetDepthStencilSurface) {
 M(BeginScene) {
     HOSTFN; DEV;
     uint32_t ui_screen=R32(0xbcc660u);
+    { static uint32_t last_ui=~0u; if (ui_screen!=last_ui) { last_ui=ui_screen; rt_log("[ui-screen] frame=%u id=%u\n",g_frame,ui_screen); } }
     prep_set(&d->sh3_ui_screen,&ui_screen,sizeof ui_screen);
 #ifdef __vita__
     static int hospital_sharp = -1;

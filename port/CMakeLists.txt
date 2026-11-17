@@ -257,6 +257,17 @@ if(SH3_BLOOD_WORLD)
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
       "${SH3_ROOT}/tools/blood_packet_unit.py" "${SH3_GEN_DIR}/x86_f${BLOOD_INDEX}.c")
   endforeach()
+  # Same protection for every effect vertex projected by F_0059ef90 (footprints and the other floor/air effects).
+  set(WORLD_UNIT "${CMAKE_CURRENT_BINARY_DIR}/world-projection/x86_f116.c")
+  execute_process(COMMAND "${Python3_EXECUTABLE}" "${SH3_ROOT}/tools/world_projection_unit.py"
+    "${SH3_GEN_DIR}/x86_f116.c" "${WORLD_UNIT}" RESULT_VARIABLE WORLD_RESULT)
+  if(NOT WORLD_RESULT EQUAL 0)
+    message(FATAL_ERROR "World projection signature verification failed")
+  endif()
+  list(REMOVE_ITEM SH3_GEN "${SH3_GEN_DIR}/x86_f116.c")
+  list(APPEND SH3_GEN "${WORLD_UNIT}")
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${SH3_ROOT}/tools/world_projection_unit.py" "${SH3_GEN_DIR}/x86_f116.c")
 endif()
 option(SH3_CURSOR_UI "Virtual mouse (left stick + Cross) for the game's cursor screens: puzzles and events" ON)
 if(SH3_CURSOR_UI)

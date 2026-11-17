@@ -15,8 +15,26 @@ extern uint32_t g_mem_size;
    exception would incorrectly stretch text. Track exact compacted XYZ in the
    current frame instead. No shader/texture heuristic, matrix rewrite or
    generated game source edit is involved. */
-static unsigned blood_frame,blood_count;
-static uint32_t blood_xyz[4096][2];
+/* Registry of the current frame's world-projected vertices: open addressing on the compacted key, an entry is valid only for the
+   frame that wrote it (no clearing). Full probe = not recorded = interface squeeze kept (fail closed). */
+#define WORLD_SLOTS 16384u
+static struct { uint32_t frame,xy,z; } world[WORLD_SLOTS];
+static unsigned world_hash(uint32_t xy,uint32_t z) { return (unsigned)((xy*2654435761u)^(z*40503u))&(WORLD_SLOTS-1u); }
+static void world_add(uint32_t xy,uint32_t z) {
+    unsigned h=world_hash(xy,z);
+    for(unsigned i=0;i<32;i++,h=(h+1)&(WORLD_SLOTS-1u)) {
+        if(world[h].frame!=g_frame+1u){world[h].frame=g_frame+1u;world[h].xy=xy;world[h].z=z;return;}   /* +1: frame 0 is a real frame */
+        if(world[h].xy==xy && world[h].z==z)return;
+    }
+}
+static int world_has(uint32_t xy,uint32_t z) {
+    unsigned h=world_hash(xy,z);
+    for(unsigned i=0;i<32;i++,h=(h+1)&(WORLD_SLOTS-1u)) {
+        if(world[h].frame!=g_frame+1u)return 0;
+        if(world[h].xy==xy && world[h].z==z)return 1;
+    }
+    return 0;
+}
 static int blood_enabled(void) {
     static int value=-1;
     if(value<0){const char *v=getenv("SH3_BLOOD_PACKET_PASS");value=v?(*v=='1'):SH3_BLOOD_WORLD_DEFAULT;}
@@ -30,21 +48,27 @@ static int blood_audit(void) {
 void diag_blood_note_packet(uint32_t p) {
     if(!blood_enabled() && !blood_audit())return;
     if(g_mem_size<160 || p>g_mem_size-160)return;
-    if(blood_frame!=g_frame){blood_frame=g_frame;blood_count=0;}
-    if(blood_count>4096-4)return; /* fail closed: no unmatched geometry is widened */
     for(unsigned i=0;i<4;i++) {
         uint32_t xyz[3];memcpy(xyz,g_mem+p+48+32*i,12);
-        blood_xyz[blood_count][0]=(xyz[0]&65535u)|(xyz[1]<<16);
-        blood_xyz[blood_count][1]=xyz[2]>>4;
-        blood_count++;
+        world_add((xyz[0]&65535u)|(xyz[1]<<16),xyz[2]>>4);
     }
 }
+/* Every world-to-screen projection of the game's effect system (F_0059ef90: blood, footprints and the other floor/air effects of
+   F_004f0xxx and F_005b5xxx..F_005caxxx) writes its integer GS X, Y, Z to out[0..2]; record them all, not only the blood producers
+   (Valentin, 2026-11-17: footprints slid like the blood and the lamp halos did). */
+void diag_world_note_xyz(uint32_t p) {
+    if(!blood_enabled() && !blood_audit())return;
+    if(g_mem_size<16 || p>g_mem_size-16)return;
+    uint32_t xyz[4];memcpy(xyz,g_mem+p,16);
+    if(blood_audit()) { static unsigned ok,bad; if(xyz[3]&~0x8000u)bad++; else ok++;
+        if((ok+bad)%2000u==0 && ok+bad<=40000u)fprintf(stderr,"[world-note] frame=%u accepted=%u rejected=%u\n",g_frame,ok,bad); }
+    if(xyz[3]&~0x8000u)return;   /* not the X, Y, Z, flag block the function writes: record nothing */
+    world_add((xyz[0]&65535u)|(xyz[1]<<16),xyz[2]>>4);
+}
 static int blood_vertex(uint32_t address) {
-    if(blood_frame!=g_frame || g_mem_size<8 || address>g_mem_size-8)return 0;
+    if(g_mem_size<8 || address>g_mem_size-8)return 0;
     uint32_t packed[2];memcpy(packed,g_mem+address,8);
-    for(unsigned i=0;i<blood_count;i++)
-        if(blood_xyz[i][0]==packed[0] && blood_xyz[i][1]==packed[1])return 1;
-    return 0;
+    return world_has(packed[0],packed[1]);
 }
 
 extern void F_0043ab80_orig(CPU *c);
@@ -82,6 +106,20 @@ void diag_wide_render_reset(CPU *c) {
 /* Interface elements use a centered 4:3 region. This preliminary wrapper
    applies to all callers; full-screen effects need separate classification. */
 /* The native particle draw (particle_draw_native.c) inlines F_00682ba0 and refuses to run while this hook would alter it. */
+/* Picture viewers (puzzle boards, documents, close-ups): the modules F_0056a4d0..F_0058c110 draw their full-screen images with the
+   game's 2D picture call F_004dc770 (cursor_ui_unit.py tags its entry). While one is on screen the whole screen keeps the game's
+   16:9 layout for that frame and the next two, text and markers drawn around the picture included, like the map: squeezed, the
+   picture sat in a 4:3 box with bars (Valentin 2026-11-17: every interactive screen must fill the screen; inventory excluded). */
+static unsigned viewer_frame=~0u;
+void diag_picture_note(uint32_t esp) {
+    uint32_t caller;
+    if (g_mem_size<8 || esp>g_mem_size-4) return;
+    memcpy(&caller,g_mem+esp,4);
+    if (caller<0x56a4d0u || caller>=0x58c300u) return;
+    if (viewer_frame!=g_frame) { static unsigned n,last; if (n<60 && caller!=last) { n++; last=caller; uint32_t ui=0; if (g_mem_size>0xbcc664u) memcpy(&ui,g_mem+0xbcc660u,4);
+        fprintf(stderr,"[wide-viewer] caller=%08x ui=%u frame=%u\n",caller,ui,g_frame); } }
+    viewer_frame=g_frame;
+}
 int diag_wide_interface_active(void) { return wide_flag(1) && wide_flag(2); }
 void diag_wide_interface_x(CPU *c) {
     uint32_t ret=0,arg=0;
@@ -104,8 +142,18 @@ void diag_wide_interface_x(CPU *c) {
        F_004794b0/F_00479e30 (particles), F_0049fac0 (lens), F_004ddae0 and F_00599b70 (sprites placed with the 3D projection F_0043ab80, e.g. blood). */
     if ((ret>=0x468b40u && ret<0x468fa0u) || (ret>=0x4749b0u && ret<0x474d70u) || (ret>=0x4794b0u && ret<0x47a8b0u) || (ret>=0x49fac0u && ret<0x4a0001u) ||
         (ret>=0x4ddae0u && ret<0x4dde20u) || (ret>=0x599b70u && ret<0x599ea0u)) return;
+    /* Full-screen interactive screens (map = ui screen 9, cursor puzzles): no 4:3 squeeze. The game's own layout then spans the
+       whole 960 x 544 surface and matches the pointer (x*512/960), which the squeeze did not (Valentin, 2026-11-17). */
+    { extern int diag_cursor_screen_active(void); uint32_t ui=0; if (g_mem_size>0xbcc664u) memcpy(&ui,g_mem+0xbcc660u,4);
+      if (ui==9 || ui==11 || diag_cursor_screen_active()) return;
+      if (viewer_frame!=~0u && g_frame-viewer_frame<=2u) return; }
     if (wide_flag(1) && wide_flag(2)) {
         double x=c->st[c->ftop&7u];
+        if (x<=8.0 || x>=952.0) {   /* test build log: a squeezed element reaching a screen edge is a full-screen 2D layer (bars at the sides) */
+            static uint32_t seen[256]; static unsigned n; uint32_t ui=0,key; if (g_mem_size>0xbcc664u) memcpy(&ui,g_mem+0xbcc660u,4);
+            key=(ui<<24)^ret; unsigned i; for(i=0;i<n;i++) if(seen[i]==key) break;
+            if(i==n && n<256){ seen[n++]=key; fprintf(stderr,"[wide-edge] ui=%u caller=%08x x=%.1f frame=%u\n",ui,ret,x,g_frame); }
+        }
         c->st[c->ftop&7u]=480.0+(x-480.0)*((4.0/3.0)/(960.0/544.0));
     }
 }

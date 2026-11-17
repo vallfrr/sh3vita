@@ -19,15 +19,15 @@ static const char *const words[5][15]={
 #else
 static const char *const words[5][15]={
 
- {"PS Vita controls","Look around","Aim","Up light / down zoom / L-R step","Left stick - move","Inventory","Pause / back","Run / guard","Action / examine","Right stick - view","Map","Back","Fixed controls"},
+ {"PS Vita controls","Look around","Aim","D-pad - move, like left stick","Left stick - move","Inventory","Pause / back","Run / guard","Action / examine","Right stick - view","Map","Back","Fixed controls"},
 
- {"Commandes PS Vita","Observer","Viser","Haut lampe / bas zoom / G-D pas","Stick gauche - déplacer","Inventaire","Pause / retour","Courir / garde","Action / examiner","Stick droit - vue","Carte","Retour","Commandes fixes"},
+ {"Commandes PS Vita","Observer","Viser","Croix - déplacer, comme le stick","Stick gauche - déplacer","Inventaire","Pause / retour","Courir / garde","Action / examiner","Stick droit - vue","Carte","Retour","Commandes fixes"},
 
- {"PS Vita Steuerung","Umsehen","Zielen","Licht / Zoom / Schritt","Linker Stick - bewegen","Inventar","Pause / Zurueck","Rennen / Abwehr","Aktion / untersuchen","Rechter Stick - Sicht","Karte","Zurueck","Feste Steuerung"},
+ {"PS Vita Steuerung","Umsehen","Zielen","Steuerkreuz - bewegen","Linker Stick - bewegen","Inventar","Pause / Zurueck","Rennen / Abwehr","Aktion / untersuchen","Rechter Stick - Sicht","Karte","Zurueck","Feste Steuerung"},
 
- {"Comandi PS Vita","Osserva","Mira","Luce / zoom / passi","Stick sinistro - muovi","Inventario","Pausa / indietro","Corri / guardia","Azione / esamina","Stick destro - vista","Mappa","Indietro","Comandi fissi"},
+ {"Comandi PS Vita","Osserva","Mira","Croce - muovi, come lo stick","Stick sinistro - muovi","Inventario","Pausa / indietro","Corri / guardia","Azione / esamina","Stick destro - vista","Mappa","Indietro","Comandi fissi"},
 
- {"Controles PS Vita","Observar","Apuntar","Luz / zoom / pasos","Stick izquierdo - mover","Inventario","Pausa / volver","Correr / defensa","Acción / examinar","Stick derecho - vista","Mapa","Volver","Controles fijos"}
+ {"Controles PS Vita","Observar","Apuntar","Cruceta - mover, como el stick","Stick izquierdo - mover","Inventario","Pausa / volver","Correr / defensa","Acción / examinar","Stick derecho - vista","Mapa","Volver","Controles fijos"}
 
 };
 

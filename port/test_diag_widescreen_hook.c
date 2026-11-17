@@ -3,7 +3,11 @@
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
-unsigned g_diag_perf;
+unsigned g_diag_perf,g_frame;
+static uint8_t memory[4096];
+uint8_t *g_mem=memory;
+uint32_t g_mem_size=sizeof memory,g_diag_res_w=960,g_diag_res_h=544;
+int diag_cursor_screen_active(void) { return 0; }
 void diag_wide_scale_x(CPU *c);
 void diag_wide_render_setter(CPU *c);
 void diag_wide_render_reset(CPU *c);

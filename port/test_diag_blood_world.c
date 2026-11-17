@@ -7,6 +7,8 @@ uint32_t g_mem_size=8192;
 unsigned g_frame=1,g_diag_perf;
 uint32_t g_diag_res_w=960,g_diag_res_h=544;
 void diag_blood_note_packet(uint32_t);
+void diag_world_note_xyz(uint32_t);
+int diag_cursor_screen_active(void) { return 0; }
 void diag_wide_interface_x(CPU *);
 void F_0043ab80_orig(CPU *c) {(void)c;}
 void F_00402b60_orig(CPU *c) {(void)c;}
@@ -47,5 +49,13 @@ int main(int argc,char **argv) {
     g_frame++;
     assert(fabs(convert(33289,34000,0x12345,0x5f6d27)-legacy)<1e-9);
     diag_blood_note_packet(0x10000000u); /* out of bounds rejected before read */
+    /* Any effect vertex projected by F_0059ef90 (footprints...): X, Y, Z then a flag word of 0 or 0x8000. */
+    { uint32_t out[4]={40000,30000,0x200000,0x8000};memcpy(g_mem+4096,out,16);diag_world_note_xyz(4096);
+      double n2=480+(40000/16.0-2048)*960/512, l2=480+(n2-480)*(4.0/3.0)/(960.0/544.0);
+      assert(fabs(convert(40000,30000,0x20000,0x5f6d27)-(enabled?n2:l2))<1e-9);
+      out[3]=0x1234;out[0]=41000;memcpy(g_mem+4096,out,16);diag_world_note_xyz(4096);   /* not a projection block: ignored */
+      n2=480+(41000/16.0-2048)*960/512; l2=480+(n2-480)*(4.0/3.0)/(960.0/544.0);
+      assert(fabs(convert(41000,30000,0x20000,0x5f6d27)-l2)<1e-9);
+      diag_world_note_xyz(8190); }
     free(g_mem);printf("blood world enabled=%d: packed XYZ, UI exclusion and frame expiry PASS\n",enabled);
 }

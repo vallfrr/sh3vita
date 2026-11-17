@@ -874,17 +874,15 @@ void diag_loop_guard_trip(unsigned fn,unsigned a_ecx,unsigned a_eax,unsigned a_e
     }
 }
 void diag_cursor_ui_tick(void) { extern unsigned g_frame; diag_cursor_ui_last=g_frame; }
-static float vc_x=256.0f, vc_y=224.0f; static int vc_click, vc_used_until, vc_seen;   /* vc_seen: a cursor screen was shown at least once */
+static float vc_x=256.0f, vc_y=256.0f; static int vc_click, vc_seen;   /* vc_seen: a cursor screen was shown at least once */
 static int vc_active(void) {
     extern unsigned g_frame;
-#ifndef __vita__
     static int test=-1; if (test<0) test=getenv("SH3_DIAG_VCURSOR_TEST")!=NULL;
-    if (test) return 1;   /* PC check of the plumbing without reaching a puzzle */
-#endif
+    if (test) { uint32_t ui; memcpy(&ui,g_mem+0xbcc660u,4); return ui==11; }   /* check of the plumbing (puzzle screen only) without reaching a puzzle (PC env var, Vita marker vcursortest) */
     return (unsigned)(g_frame-diag_cursor_ui_last)<=3u;
 }
 /* 1 while the stick drives the cursor (the pad keys for it are then muted in dinput.c) */
-int diag_vcursor_stick_mode(void) { extern unsigned g_frame; return vc_active() && (int)(vc_used_until-(int)g_frame)>0; }
+int diag_vcursor_stick_mode(void) { return vc_active(); }
 static void vc_update(void) {
     extern unsigned g_frame; static unsigned last_frame=~0u; static uint64_t last_ms;
     if (g_frame==last_frame) return; last_frame=g_frame;
@@ -894,23 +892,37 @@ static void vc_update(void) {
     SceCtrlData pad;
     if (sceCtrlPeekBufferPositiveExt2(0,&pad,1)>0 && !(pad.buttons&SCE_CTRL_INTERCEPTED)) {
         sx=((int)pad.lx-128)/128.0f; sy=((int)pad.ly-128)/128.0f; cross=!!(pad.buttons&SCE_CTRL_CROSS);
+        /* The D-pad does exactly what the left stick does (checked on a PS2, Valentin 2026-11-17). */
+        if (pad.buttons&SCE_CTRL_LEFT) sx=-1.0f; if (pad.buttons&SCE_CTRL_RIGHT) sx=1.0f;
+        if (pad.buttons&SCE_CTRL_UP) sy=-1.0f; if (pad.buttons&SCE_CTRL_DOWN) sy=1.0f;
     }
+    if (getenv("SH3_DIAG_VCURSOR_TEST")) cross=((g_frame/60u)%3u)==0;
+    if (getenv("SH3_DIAG_VCURSOR_SWEEP")) { unsigned k=(g_frame/120u)%40u; vc_x=60.0f+60.0f*(float)(k%8u); vc_y=110.0f+80.0f*(float)(k/8u); cross=(g_frame%120u)>60u; }   /* Vita test: grid of 40 positions, click in each */   /* Vita test: a one-second click every three seconds, no stick */
 #else
     if (getenv("SH3_DIAG_VCURSOR_TEST")) {   /* PC test: the cursor circles, with a click pulse every 2 s */
         float t=(float)now/1000.0f; sx=cosf(t*2.0f); sy=sinf(t*2.0f); cross=((int)(t*2.0f)&3)==0;
     }
 #endif
+    {   /* test build log: cursor screens entered/left and clicks (bounded) */
+        static int was_active,was_down; static unsigned lines; int act=vc_active();
+        if (lines<200 && (act!=was_active || (act && cross && !was_down))) { lines++;
+            fprintf(stderr,"[cursor] frame=%u %s pos=%.0f,%.0f ui=%u stage=%u room=%u\n",g_frame,act!=was_active?(act?"screen-on":"screen-off"):"click",
+                    vc_x,vc_y,*(uint32_t*)(g_mem+0xbcc660u),(unsigned)g_mem[0x70e66d9u],*(uint32_t*)(g_mem+0x897e48u)); }
+        was_active=act; was_down=act && cross;
+    }
     if (!vc_active()) { vc_click=0; return; }
+    if (!vc_seen) { const char *pos=getenv("SH3_DIAG_VCURSOR_POS"); float px,py; if (pos && sscanf(pos,"%f %f",&px,&py)==2) { vc_x=px; vc_y=py; } }
     vc_seen=1;
     float m=sqrtf(sx*sx+sy*sy);
     if (m>0.2f) {   /* dead zone, then a curve that stays precise near the centre */
-        float k=(m-0.2f)/0.8f; k*=k; float sp=420.0f*k/m;
+        float k=(m-0.2f)/0.8f; k*=k; float sp=280.0f*k/m;
         vc_x+=sx*sp*dt; vc_y+=sy*sp*dt;
-        if (vc_x<0) vc_x=0; if (vc_x>511) vc_x=511; if (vc_y<0) vc_y=0; if (vc_y>447) vc_y=447;
-        vc_used_until=(int)g_frame+120;
+        if (vc_x<0) vc_x=0; if (vc_x>511) vc_x=511; if (vc_y<0) vc_y=0; if (vc_y>511) vc_y=511;
     }
-    vc_click=cross && (int)(vc_used_until-(int)g_frame)>0;
+    vc_click=cross;
 }
+/* 1 while a cursor screen (puzzle...) updates its pointer: the game's own cursor function ran in the last frames. */
+int diag_cursor_screen_active(void) { extern unsigned g_frame; return (unsigned)(g_frame-diag_cursor_ui_last)<=3u; }
 void imp_USER32_GetCursorPos(CPU *c) {
     uint32_t p;
     if (c->esp>DIAG_MEM_SIZE-8) { fprintf(stderr,"[diag] invalid GetCursorPos stack\n"); exit(36); }
@@ -920,7 +932,10 @@ void imp_USER32_GetCursorPos(CPU *c) {
     uint32_t w=0,h=0; memcpy(&w,g_mem+0x72c780u,4); memcpy(&h,g_mem+0x72c784u,4);
     if (!w || w>8192) w=960; if (!h || h>8192) h=544;
     int32_t xy[2]={0,0};   /* as before until a cursor screen has been shown: no phantom mouse move at start */
-    if (vc_seen) { xy[0]=(int32_t)(vc_x*(float)w/512.0f+0.5f); xy[1]=(int32_t)(vc_y*(float)h/512.0f+0.5f); }
+    if (vc_seen) { xy[0]=(int32_t)(vc_x*(float)w/512.0f+0.5f); xy[1]=(int32_t)(vc_y*(float)h/512.0f+0.5f);
+        /* The game (F_006008f0 poll) calls the mouse "idle" the first frame its position does not change and then ignores the
+           button, so a still pointer could never click. A one-pixel flip each frame keeps it "moving" (Valentin 2026-11-17: click did nothing). */
+        { extern unsigned g_frame; if (vc_active()) xy[0]+=(int32_t)(g_frame&1u); } }
     memcpy(g_mem+p,xy,8); c->eax=1; c->esp+=8;
 }
 
@@ -1169,7 +1184,7 @@ void imp_USER32_GetKeyState(CPU *c) {
     memcpy(&key,g_mem+c->esp+4,4);
     unsigned button=key==1?SDL_BUTTON_LEFT:key==2?SDL_BUTTON_RIGHT:key==4?SDL_BUTTON_MIDDLE:0;
     if (!button) { fprintf(stderr,"[diag] GetKeyState key=%08x unsupported\n",key); exit(30); }
-    c->eax=((SDL_GetMouseState(NULL,NULL)&SDL_BUTTON(button))||(button==SDL_BUTTON_LEFT && vc_click))?0x8000u:0; c->esp+=8;
+    c->eax=((SDL_GetMouseState(NULL,NULL)&SDL_BUTTON(button))||(button==SDL_BUTTON_LEFT && vc_click))?0xff80u:0; c->esp+=8;   /* like Windows (-128): the game tests bit 7 of the LOW byte */
 }
 void imp_USER32_KillTimer(CPU *c) {
     uint32_t a[2];
@@ -3319,11 +3334,17 @@ int main(int argc, char **argv) {
     sceIoMkdir("ux0:data/sh3/movie",0777);
     sceIoMkdir("ux0:data/sh3/cache",0777);
     sceIoMkdir("ux0:data/sh3/savedata",0777);
-    /* Test build logs: keep the previous session (a crash followed by a relaunch must not erase its log). */
-    remove("ux0:data/sh3/diag/diag-prev.log");
-    rename("ux0:data/sh3/diag/diag.log","ux0:data/sh3/diag/diag-prev.log");
-    freopen("ux0:data/sh3/diag/diag.log","w",stderr);
-    fprintf(stderr,"[session] sh3vita test build " __DATE__ " " __TIME__ "; previous session kept in diag-prev.log\n");
+    /* Test build logs: keep the current session and the 10 previous ones, diag-1.log (latest) .. diag-10.log, so a tester who
+       met several problems can send them all (as sh4vita). On a rename error append to diag.log rather than truncate it. */
+    int rotated=1;
+    { char a[64],b[64]; SceIoStat st; remove("ux0:data/sh3/diag/diag-10.log");
+      for (int i=9;i>=0 && rotated;i--) {
+          if (i) snprintf(a,sizeof a,"ux0:data/sh3/diag/diag-%d.log",i); else snprintf(a,sizeof a,"ux0:data/sh3/diag/diag.log");
+          snprintf(b,sizeof b,"ux0:data/sh3/diag/diag-%d.log",i+1);
+          if (sceIoGetstat(a,&st)>=0 && rename(a,b)!=0) rotated=0;
+      } }
+    freopen("ux0:data/sh3/diag/diag.log",rotated?"w":"a",stderr);
+    fprintf(stderr,"[session] sh3vita test build " __DATE__ " " __TIME__ "; previous sessions in diag-1.log (latest) .. diag-10.log%s\n",rotated?"":" (rotation failed: appended)");
     boot_checks();
     extern int diag_tls_verify(void);
     if (diag_tls_verify()) return 5;
@@ -3504,6 +3525,11 @@ int main(int argc, char **argv) {
         setenv("SH3_PRIVATE_DEPTH_DISCARD","1",1);
         fprintf(stderr,"[diag] private framebuffer depth discard requested\n");
     }
+    if (unlink("ux0:data/sh3/diag/vcursortest")==0)
+        setenv("SH3_DIAG_VCURSOR_TEST","1",1);
+    if (unlink("ux0:data/sh3/diag/vcursorsweep")==0) setenv("SH3_DIAG_VCURSOR_SWEEP","1",1);
+    { FILE *vp=fopen("ux0:data/sh3/diag/vcursorpos","rb");   /* test: "x y" in the game's 512 x 512 pointer space */
+      if (vp) { char b[64]={0}; size_t n=fread(b,1,63,vp); (void)n; fclose(vp); unlink("ux0:data/sh3/diag/vcursorpos"); setenv("SH3_DIAG_VCURSOR_POS",b,1); } }
     if (unlink("ux0:data/sh3/diag/probefx")==0)
         setenv("SH3_PROBE_FX","1",1);
     if (unlink("ux0:data/sh3/diag/probefxoff")==0)
