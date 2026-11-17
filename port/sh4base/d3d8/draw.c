@@ -808,7 +808,7 @@ static GLenum cmp_of(uint32_t f) {
 static GLenum sop_of(uint32_t o) {
     // D3DSTENCILOP: 1 KEEP 2 ZERO 3 REPLACE 4 INCRSAT 5 DECRSAT 6 INVERT 7 INCR (wraps) 8 DECR (wraps).
     // 7/8 used to map to the saturating GL_INCR/GL_DECR, which breaks stencil-counted shadow/light volumes
-    // (the game counts with INCR/DECR on every volume face; cross-checked with AngeloGalav/sh3-vita, 2026-11-16).
+    // (the game counts with INCR/DECR on every volume face; cross-checked against another SH3 port, 2026-11-16).
     static const GLenum sat[] = {GL_KEEP, GL_KEEP, GL_ZERO, GL_REPLACE, GL_INCR, GL_DECR, GL_INVERT, GL_INCR, GL_DECR};
     static const GLenum wrap[] = {GL_KEEP, GL_KEEP, GL_ZERO, GL_REPLACE, GL_INCR, GL_DECR, GL_INVERT, GL_INCR_WRAP, GL_DECR_WRAP};
     // Candidate (not yet tested on the console): wrapping INCR/DECR, as the sibling port does. Opt in with SH3_STENCIL_WRAP=1.
@@ -2216,7 +2216,13 @@ static void dump_display_named(const char *name) {
     free(px);
 }
 #endif
+#ifdef __vita__
+extern void plat_power_gate(void);   /* vita_diag_platform.c: park the render thread across a console suspend */
+#endif
 void gfx_present(Device *d) {
+#ifdef __vita__
+    plat_power_gate();
+#endif
     if (__atomic_exchange_n(&bench_trace_requested, 0, __ATOMIC_ACQUIRE)) {
         ctl_trace_frame = g_pframe + 2;
         ctl_trace_n = 2; /* No per-draw glReadPixels in range mode. */
@@ -2259,7 +2265,9 @@ void gfx_present(Device *d) {
                 (unsigned long long)((SDL_GetPerformanceCounter() - begin) * 1000000ull / SDL_GetPerformanceFrequency()));
         }
     }
-    const char *dump = getenv("SH4_DUMP");
+    static int dump_read; static const char *dump_env;   /* once: getenv walks the environment, this runs every frame */
+    if (!dump_read) { dump_env = getenv("SH4_DUMP"); dump_read = 1; }
+    const char *dump = dump_env;
     if (dump) {
         unsigned every = (unsigned)atoi(dump);
         if (every && frames % every == 0) dump_backbuffer(d, frames);

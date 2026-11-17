@@ -88,7 +88,7 @@ fn folder(ui: &mut egui::Ui, id: &str, label: &str, hint: &str, browse: &str, va
 
 impl App {
     fn start(&self, ctx: egui::Context) {
-        let (game, out, movies) = (PathBuf::from(&self.game), PathBuf::from(&self.out), self.movies);
+        let (game, out, movies, lang) = (PathBuf::from(&self.game), PathBuf::from(&self.out), self.movies, prep::LANGUAGES[self.lang]);
         let st = self.st.clone();
         *st.lock().unwrap() = Shared { phase: Phase::Checking, ..Default::default() };
         std::thread::spawn(move || {
@@ -99,7 +99,7 @@ impl App {
                     s.total = plan.bytes;
                     s.files = plan.files.len();
                 }
-                prep::prepare(&plan, &out, movies, |done, file| {
+                prep::prepare(&plan, &out, movies, lang, |done, file| {
                     let mut s = st.lock().unwrap();
                     s.done = done;
                     s.current = file.display().to_string();
@@ -134,6 +134,7 @@ impl eframe::App for App {
                             }
                         });
                     });
+                    ui.label(RichText::new(i18n::TEXT[self.lang].language_hint).size(12.0).color(MUTED));
                 });
                 let text = &i18n::TEXT[self.lang];
                 ui.add_space(10.0);

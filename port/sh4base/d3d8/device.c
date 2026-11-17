@@ -570,7 +570,8 @@ static uint32_t prim_verts(uint32_t type, uint32_t n) {
     }
 }
 static int diag_skip_world(Device *d, uint32_t prim, uint32_t nprims) {   /* diagnostic: SH3_DIAG_SKIPCLASS bit 16 = skip draws with a cube texture bound, 32 = skip ps!=0 world draws */
-    static int m=-1; if(m<0){ const char *e=getenv("SH3_DIAG_SKIPCLASS"); m=e?atoi(e):0; }
+    static int m=-1; static unsigned skipvs=0; static int skiptw=0; static long skiptf=-1; if(m<0){ const char *e=getenv("SH3_DIAG_SKIPCLASS"); m=e?atoi(e):0; e=getenv("SH3_DIAG_SKIPVS"); if(e) skipvs=(unsigned)strtoul(e,NULL,16); e=getenv("SH3_DIAG_SKIPTEXW"); if(e) skiptw=atoi(e); e=getenv("SH3_DIAG_SKIPTF"); if(e) skiptf=(long)strtoul(e,NULL,16); }
+    if(skipvs && d->rt && d->rt->w==960 && d->vs==skipvs && (!skiptw || (d->tex[0] && (int)d->tex[0]->w==skiptw)) && (skiptf<0 || (long)d->rs[60]==skiptf)) return 1;   /* diagnostic: skip draws of one vertex shader id (hex), optionally for one texture-0 width */
     if(!(m&112) || !d->rt || d->rt->w!=960) return 0;
     if((m&64) && prim==5 && nprims==2 && (d->cube[1]||d->cube[2]||d->cube[3])) return 1;   /* the lamp-only cube quads */
     if((m&16) && (d->cube[1]||d->cube[2]||d->cube[3])) return 1;
@@ -595,8 +596,20 @@ M(DrawIndexedPrimitive) {
     prep_draw(d, type, d->base_vertex, prim_verts(type, n), n, idx, i32, minidx, NULL, 0);
     STDRET(6, HR_OK);
 }
+/* SH3 "afterimage" (rémanence): the game re-draws the previous frame as a full-screen alpha quad (FVF 0x104, texture = a
+   copy of the whole scene render target, SRCALPHA/INVSRCALPHA, z-test on, MODULATE2X by TFACTOR) before the scene's new
+   bright parts, so bright lights smear and leave ghost squares/streaks while the camera moves (Valentin, 2026-11-16:
+   "les lumières bavent et se dispersent", mall ceiling lights; same on PC). Dropped by default; SH3_AFTERIMAGE=1 restores it.
+   Verified on PC (corridor mall_f_01): ghosts gone, nothing else changes. Also saves one full-screen blend per frame. */
+static int sh3_afterimage_draw(Device *d) {
+    static int keep=-1; if(keep<0){ const char *e=getenv("SH3_AFTERIMAGE"); keep=e&&*e=='1'; }
+    if(keep || !d->rt || !d->tex[0] || d->vs!=0x104u) return 0;
+    if(d->tex[0]->w!=d->rt->w || d->tex[0]->h!=d->rt->h || d->rt->w<640) return 0;
+    return d->rs[27]==1 && d->rs[19]==5 && d->rs[20]==6 && d->rs[7]==1 && d->rs[14]==0 && d->rs[23]==8 && d->tss[0][1]==5u && !d->ps;   /* COLOROP MODULATE2X x TFACTOR: its colour follows the Brightness level (0x808080 at level 3, 0x4a4a4a at 7), so never test it */
+}
 M(DrawPrimitiveUP) {
     HOSTFN; DEV;
+    if(diag_skip_world(d,ARG(2),ARG(3)) || sh3_afterimage_draw(d)) STDRET(5,HR_OK);
     fadeseq_draw(d,"DrawUP",ARG(2),ARG(3));
     if(drawlog_state==2 && d->vs==0x144u && ARG(5)==28 && ARG(3)>=2 && (uint64_t)ARG(4)+112<=g_mem_size) {   /* lamp study: first/last vertex of sprite quads */
         float f0[7],f3[7]; memcpy(f0,mb+ARG(4),28); memcpy(f3,mb+ARG(4)+84,28); uint32_t c0,c3; memcpy(&c0,&f0[4],4); memcpy(&c3,&f3[4],4);
@@ -612,11 +625,12 @@ M(DrawPrimitiveUP) {
        i.e. D3D samples exactly on texel corners and its bilinear filter averages each 2x2 block; repeated
        every frame this is the original drifting blur. Vita's sampling of these corner positions duplicated
        texels instead (growing blocks). For this exact draw only: exact 2x2 mean in the shader (draw.c
-       sh3_fadebox) with a POINT sampler; everything else unchanged. */
+       sh3_fadebox) with a POINT sampler; everything else unchanged. The save-screen transition does the same
+       512x512 ping-pong copy with MODULATE2X x TFACTOR (darkening built in): accepted too (2026-11-16). */
     uint32_t fadebox=0,fade_mag=0,fade_min=0;
     {
         Texture *ft=d->tex[0];
-        if(d->vs==0x104u && !d->ps && d->tss[0][1]==2u && d->tss[0][2]==2u && ft && (ft->usage&1u) && ft->levels==1 &&
+        if(d->vs==0x104u && !d->ps && (d->tss[0][1]==2u || d->tss[0][1]==5u) && d->tss[0][2]==2u && ft && (ft->usage&1u) && ft->levels==1 &&
            d->rt && d->rt->tex && d->rt->w==ft->w && d->rt->h==ft->h && ft->w<65536u && ft->h<16384u &&
            ARG(2)==5 && ARG(3)==2 && ARG(5)==24 && (uint64_t)ARG(4)+96<=g_mem_size) {
             float v[24]; memcpy(v,mb+ARG(4),sizeof v);

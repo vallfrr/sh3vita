@@ -9,15 +9,15 @@
 #include "d3d8/prep.h"
 
 #ifdef SH3_CONTROLS_ARROWS_LAB
-static const char *const words[5][13]={
- {"PS Vita controls","Look","Aim","Light / zoom","Move / turn","Inventory","Pause / back","Run / guard","Action","Camera","Map","Back","Left / right: sidestep"},
- {"Commandes PS Vita","Observer","Viser","Lampe / zoom","Déplacer / pivoter","Inventaire","Pause / retour","Courir","Action","Vue","Carte","Retour","Gauche / droite : pas latéraux"},
- {"PS Vita Steuerung","Umsehen","Zielen","Licht / Zoom","Bewegen / drehen","Inventar","Pause","Rennen","Aktion","Sicht","Karte","Zurueck","Links / rechts: Seitenschritt"},
- {"Comandi PS Vita","Osserva","Mira","Luce / zoom","Muovi / ruota","Inventario","Pausa","Corri","Azione","Vista","Mappa","Indietro","Sinistra / destra: passo"},
- {"Controles PS Vita","Observar","Apuntar","Luz / zoom","Mover / girar","Inventario","Pausa","Correr","Acción","Vista","Mapa","Volver","Izquierda / derecha: paso"}
+static const char *const words[5][15]={
+ {"PS Vita controls","Look","Aim","Light / zoom","Move","Inventory","Pause / back","Run / guard","Action","Camera","Map","Back","Left / right: move","Light / back","Pause"},
+ {"Commandes PS Vita","Observer","Viser","Lampe / zoom","Déplacer","Inventaire","Pause / retour","Courir","Action","Vue","Carte","Retour","Gauche / droite : déplacement","Lampe / retour","Pause"},
+ {"PS Vita Steuerung","Umsehen","Zielen","Licht / Zoom","Bewegen","Inventar","Pause","Rennen","Aktion","Sicht","Karte","Zurueck","Links / rechts: bewegen","Licht / Zurueck","Pause"},
+ {"Comandi PS Vita","Osserva","Mira","Luce / zoom","Muovi","Inventario","Pausa","Corri","Azione","Vista","Mappa","Indietro","Sinistra / destra: muovi","Luce / indietro","Pausa"},
+ {"Controles PS Vita","Observar","Apuntar","Luz / zoom","Mover","Inventario","Pausa","Correr","Acción","Vista","Mapa","Volver","Izquierda / derecha: mover","Luz / volver","Pausa"}
 };
 #else
-static const char *const words[5][13]={
+static const char *const words[5][15]={
 
  {"PS Vita controls","Look around","Aim","Up light / down zoom / L-R step","Left stick - move","Inventory","Pause / back","Run / guard","Action / examine","Right stick - view","Map","Back","Fixed controls"},
 
@@ -33,7 +33,7 @@ static const char *const words[5][13]={
 
 #endif
 
-static uint32_t strings[5][13];
+static uint32_t strings[5][15];
 
 static uint32_t label_string(unsigned language,unsigned key) {
 
@@ -103,7 +103,8 @@ static void callout(float x1,float y1,float x2,float y2,float x3,float y3) {
 }
 
 void diag_controls_reference_draw(CPU*c) {
-    unsigned language=g_mem[0x70e66b1u];language=language>=1&&language<=5?language-1:0;
+    unsigned language=g_mem[0xbcc1a1u];   /* language being edited in Options (applied live), as diag_console.c */
+   language=language>=1&&language<=5?language-1:0;
     if(console_ui_begin()) {
         console_ui_fill(0,0,960,544,0xff000000);
         console_ui_sprite(UI_VITA,300,148,360,163.63f);
@@ -126,9 +127,9 @@ void diag_controls_reference_draw(CPU*c) {
     label(c,language,1,140,92);label(c,language,2,700,92);
     label(c,language,3,140,195);label(c,language,4,140,335);
     label(c,language,5,700,145);label(c,language,7,700,185);
-    label(c,language,6,700,225);label(c,language,8,700,265);
+    label(c,language,13,700,225);label(c,language,8,700,265);   /* Circle: flashlight in game, back in menus (dinput.c) */
     label(c,language,9,700,335);
-    label(c,language,10,400,375);label(c,language,6,700,375);
+    label(c,language,10,400,375);label(c,language,14,700,375);   /* Start: pause */
     label(c,language,12,140,483);label(c,language,11,780,483);
     STDRET(0,0);
 }
@@ -136,7 +137,8 @@ void diag_controls_reference_draw(CPU*c) {
 #else
 /* Retain the last readable SH3 layout until the arrow layout is qualified. */
 void diag_controls_reference_draw(CPU*c) {
-    unsigned language=g_mem[0x70e66b1u];language=language>=1&&language<=5?language-1:0;
+    unsigned language=g_mem[0xbcc1a1u];   /* language being edited in Options (applied live), as diag_console.c */
+   language=language>=1&&language<=5?language-1:0;
     if(console_ui_begin()) {
         console_ui_fill(0,0,960,544,0xff000000);
         console_ui_sprite(UI_VITA,260,74,440,200);

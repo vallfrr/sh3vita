@@ -17,7 +17,7 @@ def main():
     helpers = '\n'.join(function(source, 'static GLenum ' + name + '(')
                         for name in ('blend_of', 'cmp_of', 'sop_of'))
     candidate = function(source, 'static void apply_states(')
-    gate = '    if ((g_diag_perf&1048576u) && state_cache_matches(d,vsh)) return;'
+    gate = '    if (cache && state_cache_matches(d,vsh)) return;'
     assert candidate.count(gate) == 1
     retained = candidate.replace(gate, '').replace('apply_states(', 'apply_retained(', 1)
     constants = set(re.findall(r'\bGL_[A-Z_0-9]+\b', helpers + candidate)) - {'GL_TRUE', 'GL_FALSE'}
@@ -43,6 +43,7 @@ typedef struct {
 static unsigned rt_shift(Surface *s) { return s->shift; }
 static unsigned g_diag_perf=1048576u;
 static int fx_active;
+static int g_glstatecache_ab, g_glstatecache_phase; /* A/B switch of the real function, off here */
 typedef struct { unsigned enabled[128]; uint64_t args[32]; } GlState;
 static GlState *current;
 static unsigned calls;

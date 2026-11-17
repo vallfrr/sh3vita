@@ -128,7 +128,8 @@ int particle_draw_native(CPU *c) {
         !R32(0x72bfd8u)) { g_pd_refused++; return 0; }
     g_pd_native++;
     { static int once; if (!once) { once = 1; fprintf(stderr, "[particle-draw] native loop running (widescreen remap %d)\n", diag_wide_interface_active()); } }
-    const int wide = diag_wide_interface_active();
+    /* Particles are anchored in the 3D world and use the widened projection: no interface squeeze (diag_widescreen_hook.c). */
+    const int wide = 0; (void)diag_wide_interface_active;
     const uint32_t S = c->esp, ebp = c->ebp;
     const float zero = gf(0x68a868u), one = gf(0x68a754u), c25 = gf(0x68f030u), k16 = gf(0x68ecf4u);
     const float s24 = gf(S + 0x24), s70 = gf(S + 0x70), sc0 = gf(S + 0xc0);

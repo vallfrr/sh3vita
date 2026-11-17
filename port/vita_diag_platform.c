@@ -5,6 +5,7 @@
 #include <psp2/kernel/sysmem.h>
 #include <psp2/kernel/processmgr.h>
 #include <psp2/kernel/threadmgr.h>
+#include <psp2/power.h>
 #include <SDL.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -93,18 +94,71 @@ static int keep_awake_thread(SceSize args, void *argp) {
     }
     return 0;
 }
+/* Suspend/resume (crash 2026-11-17, second test Vita: sleep ~30 s in game, then the render thread faulted in SceGxm at the
+   first present after wake-up, reading unmapped memory). The port registered no power callback: the console froze the
+   GPU in the middle of a scene. Now a callback thread raises a pause on the power button / system suspend; the render
+   thread (gfx_present -> plat_power_gate) waits for the GPU (glFinish) and stays parked until the system has resumed.
+   The callback itself touches no GPU, file or guest memory; it only waits (bounded) for the render thread to park. */
+static volatile int power_pause, power_parked;
+static int power_event(int id, int count, int flags, void *arg) {
+    (void)id; (void)count; (void)arg;
+    const int going = flags & (SCE_POWER_CB_BUTTON_POWER_PRESS | SCE_POWER_CB_SYSTEM_SUSPEND | SCE_POWER_CB_APP_SUSPEND);
+    const int back = flags & (SCE_POWER_CB_SYSTEM_RESUME | SCE_POWER_CB_AFTER_SYSTEM_RESUME | SCE_POWER_CB_APP_RESUME);
+    if (going && !power_pause) {
+        power_pause = 1;
+        for (int i = 0; i < 100 && !power_parked; i++) sceKernelDelayThread(5000);   /* at most 0.5 s */
+    }
+    if (back && power_pause) power_pause = 0;
+    if (going || back) fprintf(stderr, "[power] flags=%08x pause=%d parked=%d\n", (unsigned)flags, power_pause, power_parked);
+    return 0;
+}
+static int power_thread(SceSize args, void *argp) {
+    (void)args; (void)argp;
+    SceUID cb = sceKernelCreateCallback("sh3_power", 0, power_event, NULL);
+    int r = cb < 0 ? cb : scePowerRegisterCallback(cb);
+    fprintf(stderr, "[power] callback=%08x registered=%08x\n", (unsigned)cb, (unsigned)r);
+    for (;;) sceKernelDelayThreadCB(1000u * 1000u);
+    return 0;
+}
+/* Render thread, start of each present. One volatile load per frame when nothing happens. */
+void plat_power_gate(void) {
+    if (!power_pause) return;
+    glFinish();
+    power_parked = 1;
+    /* Process time does not advance while the console sleeps: 3 s of it without a resume event means no suspend
+       happened (e.g. power menu cancelled), so never stay parked forever. */
+    SceUInt64 t0 = sceKernelGetProcessTimeWide();
+    while (power_pause && sceKernelGetProcessTimeWide() - t0 < 3000000u) sceKernelDelayThread(10000);
+    power_pause = 0;
+    power_parked = 0;
+    fprintf(stderr, "[power] render thread resumed\n");
+}
 void plat_gl_init(void) {
     static int initialized; if (initialized) return; initialized=1;
     { SceUID t=sceKernelCreateThread("sh3_keep_awake",keep_awake_thread,0xa0,0x1000,0,0,NULL);
       if (t>=0) sceKernelStartThread(t,0,NULL);
       fprintf(stderr,"[diag] keep-awake thread %s\n",t>=0?"started":"FAILED"); }
+    { SceUID t=sceKernelCreateThread("sh3_power",power_thread,0x40,0x2000,0,0,NULL);
+      if (t>=0) sceKernelStartThread(t,0,NULL);
+      if (t<0) fprintf(stderr,"[power] callback thread FAILED %08x\n",(unsigned)t); }
     extern unsigned g_diag_perf;
+    /* Sleep/resume A/B (2026-11-17: SceGxm fault after waking the console; SH4 survives sleep with the same vitaGL, so
+       test the three SH3-only GPU settings). Persistent file ux0:data/sh3/diag/sleeptest (NOT consumed, so several
+       sleeps can be tried), words: scenes1 (1 GXM scene per target instead of 8), noreserve (no 8 MB phycont reserve
+       for the movie decoder), nolazy (depth attached at bind time, no lazy depth). Absent file: unchanged behaviour. */
+    int sleep_scenes1=0, sleep_noreserve=0;
+    { FILE *m=fopen("ux0:data/sh3/diag/sleeptest","rb"); if (m) { char v[128]={0}; size_t n=fread(v,1,sizeof v-1,m); fclose(m); v[n]=0;
+        sleep_scenes1=strstr(v,"scenes1")!=NULL; sleep_noreserve=strstr(v,"noreserve")!=NULL;
+        if (strstr(v,"nolazy")) setenv("SH3_LAZYDEPTH","0",1);
+        fprintf(stderr,"[sleeptest] scenes1=%d noreserve=%d nolazy=%d\n",sleep_scenes1,sleep_noreserve,strstr(v,"nolazy")!=NULL); } }
 #ifndef SH3_GXM_SCENES8_DEFAULT
 #define SH3_GXM_SCENES8_DEFAULT 1 /* promoted 2026-11-12 with lazy depth; -DSH3_GXM_SCENES8_DEFAULT=0 disables */
 #endif
 #if SH3_GXM_SCENES8_DEFAULT
+    if (!sleep_scenes1) {
     vglSetupRenderTargetScenesNum(8,8);
     fprintf(stderr,"[diag] GXM scenes per target 8/8 (compiled default)\n");
+    }
 #endif
     { FILE *m=fopen("ux0:data/sh3/diag/gxmscenes8","rb"); if (m) { fclose(m); unlink("ux0:data/sh3/diag/gxmscenes8"); vglSetupRenderTargetScenesNum(8,8); fprintf(stderr,"[diag] GXM scenes per target 8/8 (marker)\n"); } }
     if (g_diag_perf&32768u) {
@@ -124,15 +178,15 @@ void plat_gl_init(void) {
 #ifdef SH3_MOVIE_HW_LAB
     /* vglInitExtended takes all phycont/cdram; the AvPlayer hardware decoder then cannot allocate its frame
        buffers (v4: no frame, no audio after 15 s). Lab only: leave 8 MB phycont + 32 MB cdram free, the values
-       console-tested by the AngeloGalav/sh3-vita fork (vitaGL video_playback sample does the same). cdlg 0x8C6000
+       console-tested by another SH3 Vita port (vitaGL video_playback sample does the same). cdlg 0x8C6000
        keeps the common-dialog budget exactly like vglInitExtended. */
     /* cdram threshold 0: vitaGL keeps all CDRAM, as vglInitExtended (a 32 MB reserve was suspected of the
        <15 FPS gameplay regression; benches v5-v9 show AvPlayer using only 2+5+1 MB of phycont for 512x384). */
     /* A/B marker noreserve: stock vglInitExtended (no phycont reserve) to measure its gameplay cost. */
-    FILE *nr=fopen("ux0:data/sh3/diag/noreserve","rb");
+    FILE *nr=sleep_noreserve?NULL:fopen("ux0:data/sh3/diag/noreserve","rb");
     GLboolean reduced;
-    if(nr) {
-        fclose(nr);unlink("ux0:data/sh3/diag/noreserve");
+    if(nr || sleep_noreserve) {
+        if (nr) { fclose(nr);unlink("ux0:data/sh3/diag/noreserve"); }
         reduced=vglInitExtended(0,960,544,threshold,SCE_GXM_MULTISAMPLE_NONE);
         fprintf(stderr,"[movie-hw] noreserve: stock vglInitExtended (AvPlayer frames may fail)\n");
     } else {
@@ -169,8 +223,27 @@ static void bench_shot_half(const char *path) {
     if (fclose(f)) ok=0;
     fprintf(stderr,"[bench] shot %s %s 480x272\n",path,ok?"saved":"FAILED");
 }
-static char bench_shot_path[256];
-void diag_bench_shot(const char *name) { snprintf(bench_shot_path,sizeof bench_shot_path,"%s.tga",name); }
+/* Bench producer and queued presentation consumer can run on different
+   threads. A single unsynchronised path silently lost requests. */
+static char bench_shots[64][256];
+static unsigned bench_shot_read,bench_shot_write;
+static SDL_SpinLock bench_shot_lock;
+void diag_bench_shot(const char *name) {
+    SDL_AtomicLock(&bench_shot_lock);
+    if(bench_shot_write-bench_shot_read==64) {
+        SDL_AtomicUnlock(&bench_shot_lock);
+        rt_fatal("[bench] capture request queue full");
+    }
+    snprintf(bench_shots[bench_shot_write++%64],256,"%s.tga",name);
+    SDL_AtomicUnlock(&bench_shot_lock);
+}
+static int bench_take_shot(char path[256]) {
+    SDL_AtomicLock(&bench_shot_lock);
+    int available=bench_shot_read!=bench_shot_write;
+    if(available)memcpy(path,bench_shots[bench_shot_read++%64],256);
+    SDL_AtomicUnlock(&bench_shot_lock);
+    return available;
+}
 void plat_shot_raw(const char *requested) {
     const char *path="ux0:data/sh3/diag/shot.tga";
     if (requested && !strncmp(requested,"ux0:",4)) path=requested;
@@ -317,7 +390,7 @@ void plat_gl_swap(void) {
        the supposedly one-shot request run again every 60 swaps. Vita-Shot
        also expects the documented shot.tga destination for both markers. */
     if (f) { fclose(f); unlink(trigger); plat_shot_raw(NULL); fflush(stderr); }
-    if (bench_shot_path[0]) { char tmp[256]; snprintf(tmp,sizeof tmp,"%s",bench_shot_path); bench_shot_path[0]=0; bench_shot_half(tmp); fflush(stderr); }
+    { char tmp[256]; if(bench_take_shot(tmp)) {bench_shot_half(tmp);fflush(stderr);} }
     unsigned pending=__atomic_exchange_n(&capture_requests,0,__ATOMIC_RELAXED);
     if (pending&2u) plat_shot_raw("move-before");
     if (pending&4u) plat_shot_raw("move-after");

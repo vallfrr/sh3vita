@@ -180,6 +180,11 @@ M(dev, GetDeviceState) {
         /* The native main-state slot is 5 during gameplay. Pause stays in
            that state but sets bcc218; inventory/options have their own states.
            Do not mix camera arrows with movement keys as the old map did. */
+        /* Cursor screens (puzzles...): while the left stick drives the virtual mouse (diag_runtime.c) it must not also press the
+           move keys, and Cross is the mouse click, not Enter/Space (otherwise the confirmation would fire twice). */
+        extern int diag_vcursor_stick_mode(void);
+        const int cursor_mode=diag_vcursor_stick_mode();
+        if(cursor_mode) pad.lx=pad.ly=128;
         uint32_t main_state=R32(0xbcc660u);
         int gameplay=main_state==5 && !R8(0xbcc218u);
         {   /* bounded pad trace (inventory investigation): every change of the button mask or of the menu/gameplay mapping */
@@ -190,10 +195,10 @@ M(dev, GetDeviceState) {
         }
 #define VKEY(k) do { if(n>(k))W8(p+(k),0x80); } while(0)
         if(gameplay) {
-            if(pad.ly<64)VKEY(0x11);      /* W: forward, Type3D */
-            if(pad.ly>192)VKEY(0x1f);     /* S: backward */
-            if(pad.lx<64)VKEY(0x10);     /* Q: native Type3D turn left */
-            if(pad.lx>192)VKEY(0x12);    /* E: native Type3D turn right */
+            if(pad.ly<64)VKEY(0x11);      /* W: up (Type2D: the stick direction is the walking direction) */
+            if(pad.ly>192)VKEY(0x1f);     /* S: down */
+            if(pad.lx<64)VKEY(0x10);     /* Q: left (Type2D left/right are Q/E, checked on Vita 2026-11-16; A/D do nothing in 2D) */
+            if(pad.lx>192)VKEY(0x12);    /* E: right */
             int look=pad.rx<64 || pad.rx>192 || pad.ry<64 || pad.ry>192;
             if(look)VKEY(0x0f);          /* native Search view, held while looking */
             if(pad.rx<64)VKEY(0xcb);     /* native view only */
@@ -202,8 +207,8 @@ M(dev, GetDeviceState) {
             if(pad.ry>192)VKEY(0xd0);
             if(pad.buttons&SCE_CTRL_UP)VKEY(0x26);   /* flashlight */
             if(pad.buttons&SCE_CTRL_DOWN)VKEY(0x2c); /* native zoom, Z */
-            if(pad.buttons&SCE_CTRL_LEFT)VKEY(0x1e);
-            if(pad.buttons&SCE_CTRL_RIGHT)VKEY(0x20);
+            if(pad.buttons&SCE_CTRL_LEFT)VKEY(0x10);   /* Type2D left (A/D side steps do nothing in 2D) */
+            if(pad.buttons&SCE_CTRL_RIGHT)VKEY(0x12);  /* Type2D right */
         } else {
             /* Menus read the arrow keys AND the native Type3D keys W/S/Q/E (0x11/0x1f/0x10/0x12): the bench key
                injection (PAD_UP/DOWN/LEFT/RIGHT) sends both and navigates; arrows alone left the inventory
@@ -214,11 +219,13 @@ M(dev, GetDeviceState) {
             if((pad.buttons&SCE_CTRL_RIGHT) || pad.lx>192){VKEY(0xcd);VKEY(0x12);}
         }
 #undef VKEY
-        if (pad.buttons&SCE_CTRL_CROSS) { if (n>0x1c) W8(p+0x1c,0x80); }
-        if (pad.buttons&SCE_CTRL_CROSS) { if (n>0x39) W8(p+0x39,0x80); }
+        if ((pad.buttons&SCE_CTRL_CROSS) && !cursor_mode) { if (n>0x1c) W8(p+0x1c,0x80); }
+        if ((pad.buttons&SCE_CTRL_CROSS) && !cursor_mode) { if (n>0x39) W8(p+0x39,0x80); }
         /* Default PC bindings from the original CD readme; these remain
            experimental until tested with the game's configurable key.ini. */
-        if (pad.buttons&(SCE_CTRL_CIRCLE|SCE_CTRL_START)) { if (n>1) W8(p+1,0x80); }
+        /* Start opens the pause menu; Circle is Cancel (Esc) in menus only - in gameplay it must not open the pause (Valentin 2026-11-16). */
+        if ((pad.buttons&SCE_CTRL_START) || (!gameplay && (pad.buttons&SCE_CTRL_CIRCLE))) { if (n>1) W8(p+1,0x80); }
+        if (gameplay && (pad.buttons&SCE_CTRL_CIRCLE)) { if (n>0x26) W8(p+0x26,0x80); } /* Circle = flashlight (L) in gameplay, Valentin 2026-11-16 */
         if (pad.buttons&SCE_CTRL_SQUARE) { if (n>0x2a) W8(p+0x2a,0x80); } /* left shift: run */
         if (pad.buttons&SCE_CTRL_TRIANGLE) { if (n>0x17) W8(p+0x17,0x80); } /* I: inventory */
         if (pad.buttons&SCE_CTRL_SELECT) { if (n>0x32) W8(p+0x32,0x80); } /* M: map */

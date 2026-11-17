@@ -43,6 +43,7 @@
 #include <psp2/kernel/processmgr.h>
 #include <psp2/kernel/modulemgr.h>
 #include <psp2/power.h>
+#include <psp2/ctrl.h>
 #include <psp2/kernel/threadmgr.h>
 #include <psp2/kernel/cpu.h>
 #include <psp2/rtc.h>
@@ -152,6 +153,8 @@ static struct { uint32_t ret, ms; unsigned n; } ct_sleep_site[8];   /* game-thre
 /* getenv walks the environment under a lock: with fastcom the diagnostic switches are read once. */
 static int env_verbose=-1, env_comlog=-1, env_tinylog=-1;
 #define DIAG_ENV(cache,name) ((g_diag_perf&PERF_FASTCOM) ? ((cache)<0 ? ((cache)=getenv(name)!=NULL) : (cache)) : getenv(name)!=NULL)
+/* Environment is frozen by main() before guest entry: read each diagnostic flag once (hot paths: waits, messages, mmio). */
+#define DIAG_FLAG(name) ({ static int _df=-1; if (_df<0) _df=getenv(name)!=NULL; _df; })
 /* Closed read-only game data streams kept for the next CreateFileA of the same path (filecache). */
 static struct { char path[256]; FILE *f; } diag_file_cache[8];
 static char diag_file_path[64][256];
@@ -171,6 +174,9 @@ static const char *volatile diag_main_last_host;
 static volatile unsigned diag_main_host_calls;
 static volatile uint32_t diag_main_last_ret;   /* guest return address of that call */
 static volatile int diag_main_in_host;        /* 1 while the game thread is inside a fast-path Direct3D call */
+#ifdef _WIN32
+static void *diag_main_thread_handle;   /* PC only: real instruction pointer of a stalled game thread */
+#endif
 static int diag_freeze_watch(void *unused) {
     (void)unused; extern unsigned g_frame;
     unsigned lastf=0,lastcalls=0,lines=0; uint64_t since=SDL_GetTicks64();
@@ -183,6 +189,24 @@ static int diag_freeze_watch(void *unused) {
             fprintf(stderr,"[freeze-sample] stalled=%llu ms frame=%u last_host=%s ret=%08x in_host=%d host_calls=+%u\n",
                     (unsigned long long)(now-since),f,h?h:"-",(unsigned)diag_main_last_ret,diag_main_in_host,calls-lastcalls);
             lastcalls=calls; lines++;
+            if (now-since>=3000 && now-since<3500 && diag_main_cpu && diag_main_cpu->esp<DIAG_MEM_SIZE-64) {
+                /* guest call chain of the stalled game thread (stack words that look like code addresses) */
+                char line[400]; int k=0; uint32_t sp=diag_main_cpu->esp;
+                for (unsigned i=0;i<64 && k<360;i++) { uint32_t w; memcpy(&w,g_mem+sp+4*i,4); if (w>=0x401000u && w<0x680000u) k+=snprintf(line+k,sizeof line-k," %08x",w); }
+                fprintf(stderr,"[freeze-stack] esp=%08x code-words:%s\n",sp,line);
+#ifdef _WIN32
+                if (diag_main_thread_handle) {
+                    for (int rep=0;rep<5;rep++) {
+                        CONTEXT ctx; memset(&ctx,0,sizeof ctx); ctx.ContextFlags=CONTEXT_CONTROL;
+                        if (SuspendThread((HANDLE)diag_main_thread_handle)!=(DWORD)-1) {
+                            if (GetThreadContext((HANDLE)diag_main_thread_handle,&ctx)) fprintf(stderr,"[freeze-rip] sample %d rip=%p off=%llx\n",rep,(void *)(uintptr_t)ctx.Rip,(unsigned long long)(ctx.Rip-(uintptr_t)GetModuleHandle(NULL)));
+                            ResumeThread((HANDLE)diag_main_thread_handle);
+                        }
+                        SDL_Delay(20);
+                    }
+                }
+#endif
+            }
         }
     }
     return 0;
@@ -297,11 +321,11 @@ void imp_KERNEL32_GetModuleHandleA(CPU *c) {
             c->eax=0x7c800000u; c->esp+=8; return;
         }
         if (!strcasecmp((char *)g_mem+name,"d3d8.dll")) {
-            if (getenv("SH3_DIAG_VERBOSE")) fprintf(stderr,"[diag] GetModuleHandleA(d3d8.dll) -> synthetic handle\n");
+            if (DIAG_FLAG("SH3_DIAG_VERBOSE")) fprintf(stderr,"[diag] GetModuleHandleA(d3d8.dll) -> synthetic handle\n");
             c->eax=0x7b000000u; c->esp+=8; return;
         }
         if (!strcasecmp((char *)g_mem+name,"d3d8d.dll")) {
-            if (getenv("SH3_DIAG_VERBOSE")) fprintf(stderr,"[diag] GetModuleHandleA(d3d8d.dll) -> debug module absent\n");
+            if (DIAG_FLAG("SH3_DIAG_VERBOSE")) fprintf(stderr,"[diag] GetModuleHandleA(d3d8d.dll) -> debug module absent\n");
             c->eax=0; c->esp+=8; return;
         }
         fprintf(stderr, "[diag] GetModuleHandleA named module not implemented: %.128s\n",g_mem+name); exit(30);
@@ -316,7 +340,7 @@ void imp_KERNEL32_LoadLibraryA(CPU *c) {
     memcpy(&p,g_mem+c->esp+4,4);
     if (!p || p>=DIAG_MEM_SIZE || !memchr(g_mem+p,0,DIAG_MEM_SIZE-p)) { fprintf(stderr,"[diag] invalid LoadLibraryA name\n"); exit(36); }
     if (!strcasecmp((char *)g_mem+p,"d3d8.dll")) {
-        if (getenv("SH3_DIAG_VERBOSE")) fprintf(stderr,"[diag] LoadLibraryA d3d8.dll -> synthetic module\n"); c->eax=0x7b000000u; c->esp+=8; return;
+        if (DIAG_FLAG("SH3_DIAG_VERBOSE")) fprintf(stderr,"[diag] LoadLibraryA d3d8.dll -> synthetic module\n"); c->eax=0x7b000000u; c->esp+=8; return;
     }
     fprintf(stderr,"[diag] LoadLibraryA %.200s not implemented\n",g_mem+p); exit(30);
 }
@@ -368,7 +392,7 @@ void imp_KERNEL32_GetProcAddress(CPU *c) {
         if (args[0]==0x7b000000u && (!strcmp((char *)g_mem+args[1],"ValidatePixelShader") ||
                                     !strcmp((char *)g_mem+args[1],"ValidateVertexShader") ||
                                     !strcmp((char *)g_mem+args[1],"DebugSetMute"))) {
-            if (getenv("SH3_DIAG_VERBOSE")) fprintf(stderr,"[diag] optional %.128s unavailable\n",g_mem+args[1]); c->eax=0; c->esp+=12; return;
+            if (DIAG_FLAG("SH3_DIAG_VERBOSE")) fprintf(stderr,"[diag] optional %.128s unavailable\n",g_mem+args[1]); c->eax=0; c->esp+=12; return;
         }
         if (args[0] == 0x7c800000u &&
             (!strcmp((char *)g_mem+args[1],"InitializeCriticalSectionAndSpinCount") ||
@@ -446,6 +470,14 @@ void imp_KERNEL32_HeapAlloc(CPU *c) {
     memcpy(a,g_mem+c->esp+4,sizeof a);
     if (a[0]!=DIAG_HEAP_HANDLE || (a[1]&~8u)) { fprintf(stderr,"[diag] unsupported HeapAlloc handle/flags\n"); exit(30); }
     c->eax=diag_heap_alloc(diag_guest_heap,a[2],!!(a[1]&8));
+    if (!c->eax && a[2]) {   /* allocation failure: who asked (guest return address and the code addresses on the stack) */
+        static unsigned reported; extern unsigned g_frame;
+        if (reported++<8) {
+            char chain[300]; int k=0;
+            for (unsigned i=0;i<48 && k<260 && c->esp+4*i<DIAG_MEM_SIZE-4;i++) { uint32_t w; memcpy(&w,g_mem+c->esp+4*i,4); if (w>=0x401000u && w<0x680000u) k+=snprintf(chain+k,sizeof chain-k," %08x",w); }
+            fprintf(stderr,"[heap-failure-caller] size=%u frame=%u stage=%u chain:%s\n",a[2],g_frame,(unsigned)g_mem[0x70e66d9u],chain);
+        }
+    }
     if (a[2]<=4 && DIAG_ENV(env_tinylog,"SH3_DIAG_TINYLOG")) {
         uint32_t return_pc; memcpy(&return_pc,g_mem+c->esp,4);
         uint32_t frame_return=0, frame_parent=0;
@@ -822,12 +854,73 @@ void imp_USER32_LoadStringA(CPU *c) {
     exit(30);
 }
 
+/* Virtual mouse for the game's cursor screens (puzzles, events: F_004dd130 follows the mouse once it is "active", exactly like
+   on a PC with a mouse). The Vita has none: while such a screen is updated (diag_cursor_ui_tick, cursor_ui_unit.py) the LEFT
+   STICK moves a cursor kept in the game's own 512-wide space and CROSS is the left button (GetKeyState VK_LBUTTON). The game
+   converts the position it reads with x*512/window width, so the screen position is the inverse of that formula. Outside those
+   screens the position never changes (the game then treats the mouse as idle) and the button reads released. */
+static volatile unsigned diag_cursor_ui_last=0x7fffffffu;
+/* Called by the bounded collision-list walk (loop_guard_unit.py) when it gives up: log the registers and the start of both lists. */
+void diag_loop_guard_trip(unsigned fn,unsigned a_ecx,unsigned a_eax,unsigned a_esi,unsigned a_edi) {
+    static unsigned trips; if (trips++>=6) return;
+    extern unsigned g_frame;
+    fprintf(stderr,"[loop-guard] F_%08x gave up at frame %u: ecx=%08x eax=%08x esi=%08x edi=%08x stage=%u room=%u\n",fn,g_frame,a_ecx,a_eax,a_esi,a_edi,
+            (unsigned)g_mem[0x70e66d9u],(unsigned)*(uint32_t *)(g_mem+0x897e48u));
+    unsigned bases[2]={a_ecx,a_esi};
+    for (unsigned k=0;k<2;k++) if (bases[k]<DIAG_MEM_SIZE-80) {
+        fprintf(stderr,"[loop-guard] list %c @%08x:",k?'i':'o',bases[k]);
+        for (unsigned i=0;i<16;i++) { uint32_t w; memcpy(&w,g_mem+bases[k]+4*i,4); fprintf(stderr," %08x",w); }
+        fprintf(stderr,"\n");
+    }
+}
+void diag_cursor_ui_tick(void) { extern unsigned g_frame; diag_cursor_ui_last=g_frame; }
+static float vc_x=256.0f, vc_y=224.0f; static int vc_click, vc_used_until, vc_seen;   /* vc_seen: a cursor screen was shown at least once */
+static int vc_active(void) {
+    extern unsigned g_frame;
+#ifndef __vita__
+    static int test=-1; if (test<0) test=getenv("SH3_DIAG_VCURSOR_TEST")!=NULL;
+    if (test) return 1;   /* PC check of the plumbing without reaching a puzzle */
+#endif
+    return (unsigned)(g_frame-diag_cursor_ui_last)<=3u;
+}
+/* 1 while the stick drives the cursor (the pad keys for it are then muted in dinput.c) */
+int diag_vcursor_stick_mode(void) { extern unsigned g_frame; return vc_active() && (int)(vc_used_until-(int)g_frame)>0; }
+static void vc_update(void) {
+    extern unsigned g_frame; static unsigned last_frame=~0u; static uint64_t last_ms;
+    if (g_frame==last_frame) return; last_frame=g_frame;
+    uint64_t now=SDL_GetTicks64(); float dt=last_ms?(float)(now-last_ms)/1000.0f:0.0f; last_ms=now; if (dt>0.1f) dt=0.1f;
+    float sx=0,sy=0; int cross=0;
+#ifdef __vita__
+    SceCtrlData pad;
+    if (sceCtrlPeekBufferPositiveExt2(0,&pad,1)>0 && !(pad.buttons&SCE_CTRL_INTERCEPTED)) {
+        sx=((int)pad.lx-128)/128.0f; sy=((int)pad.ly-128)/128.0f; cross=!!(pad.buttons&SCE_CTRL_CROSS);
+    }
+#else
+    if (getenv("SH3_DIAG_VCURSOR_TEST")) {   /* PC test: the cursor circles, with a click pulse every 2 s */
+        float t=(float)now/1000.0f; sx=cosf(t*2.0f); sy=sinf(t*2.0f); cross=((int)(t*2.0f)&3)==0;
+    }
+#endif
+    if (!vc_active()) { vc_click=0; return; }
+    vc_seen=1;
+    float m=sqrtf(sx*sx+sy*sy);
+    if (m>0.2f) {   /* dead zone, then a curve that stays precise near the centre */
+        float k=(m-0.2f)/0.8f; k*=k; float sp=420.0f*k/m;
+        vc_x+=sx*sp*dt; vc_y+=sy*sp*dt;
+        if (vc_x<0) vc_x=0; if (vc_x>511) vc_x=511; if (vc_y<0) vc_y=0; if (vc_y>447) vc_y=447;
+        vc_used_until=(int)g_frame+120;
+    }
+    vc_click=cross && (int)(vc_used_until-(int)g_frame)>0;
+}
 void imp_USER32_GetCursorPos(CPU *c) {
-    uint32_t p; int32_t xy[2]={0,0};
+    uint32_t p;
     if (c->esp>DIAG_MEM_SIZE-8) { fprintf(stderr,"[diag] invalid GetCursorPos stack\n"); exit(36); }
     memcpy(&p,g_mem+c->esp+4,4);
     if (!p || p>DIAG_MEM_SIZE-8) { fprintf(stderr,"[diag] invalid cursor output\n"); exit(36); }
-    if (getenv("SH3_DIAG_VERBOSE")) fprintf(stderr,"[diag] GetCursorPos returns synthetic (0,0)\n");
+    vc_update();
+    uint32_t w=0,h=0; memcpy(&w,g_mem+0x72c780u,4); memcpy(&h,g_mem+0x72c784u,4);
+    if (!w || w>8192) w=960; if (!h || h>8192) h=544;
+    int32_t xy[2]={0,0};   /* as before until a cursor screen has been shown: no phantom mouse move at start */
+    if (vc_seen) { xy[0]=(int32_t)(vc_x*(float)w/512.0f+0.5f); xy[1]=(int32_t)(vc_y*(float)h/512.0f+0.5f); }
     memcpy(g_mem+p,xy,8); c->eax=1; c->esp+=8;
 }
 
@@ -863,7 +956,7 @@ void imp_WINMM_timeBeginPeriod(CPU *c) {
     if (c->esp>DIAG_MEM_SIZE-8) { fprintf(stderr,"[diag] invalid timer period stack\n"); exit(36); }
     memcpy(&period,g_mem+c->esp+4,4);
     if (period!=1) { fprintf(stderr,"[diag] unsupported timer period %u\n",period); exit(30); }
-    if (getenv("SH3_DIAG_VERBOSE")) fprintf(stderr,"[diag] timeBeginPeriod(1): resolution unchanged (SH4 approximation)\n");
+    if (DIAG_FLAG("SH3_DIAG_VERBOSE")) fprintf(stderr,"[diag] timeBeginPeriod(1): resolution unchanged (SH4 approximation)\n");
     c->eax=0; c->esp+=8;
 }
 void imp_WINMM_timeEndPeriod(CPU *c) {
@@ -877,7 +970,7 @@ void imp_WINMM_timeEndPeriod(CPU *c) {
 static Uint32 diag_timer_callback(Uint32 interval,void *opaque) {
     (void)interval; DiagTimer *t=opaque;
     pthread_mutex_lock(&t->lock);
-    if (getenv("SH3_DIAG_VERBOSE")) fprintf(stderr,"[diag] experimental one-shot timer callback %08x\n",t->callback);
+    if (DIAG_FLAG("SH3_DIAG_VERBOSE")) fprintf(stderr,"[diag] experimental one-shot timer callback %08x\n",t->callback);
     rt_guest_call(&t->cpu,t->callback,5,t->handle,0u,t->user,0u,0u);
     pthread_mutex_unlock(&t->lock);
     return 0;
@@ -886,7 +979,7 @@ void imp_WINMM_timeSetEvent(CPU *c) {
     uint32_t a[5];
     if (c->esp>DIAG_MEM_SIZE-24) { fprintf(stderr,"[diag] invalid timeSetEvent stack\n"); exit(36); }
     memcpy(a,g_mem+c->esp+4,sizeof a);
-    if (getenv("SH3_DIAG_VERBOSE")) fprintf(stderr,"[diag] timeSetEvent delay=%u resolution=%u callback=%08x user=%08x flags=%x\n",a[0],a[1],a[2],a[3],a[4]);
+    if (DIAG_FLAG("SH3_DIAG_VERBOSE")) fprintf(stderr,"[diag] timeSetEvent delay=%u resolution=%u callback=%08x user=%08x flags=%x\n",a[0],a[1],a[2],a[3],a[4]);
     if (!getenv("SH3_DIAG_THREADS") || !a[0] || a[0]>1000 || a[1] || a[4] || !rt_lookup(a[2])) {
         fprintf(stderr,"[diag] unsupported multimedia timer\n"); exit(30);
     }
@@ -921,7 +1014,7 @@ void imp_WINMM_timeKillEvent(CPU *c) {
     if (!diag_timer || h!=diag_timer->handle || tid!=0x200) {
         fprintf(stderr,"[diag] external timeKillEvent %08x caller=%u unsupported\n",h,tid); exit(30);
     }
-    if (getenv("SH3_DIAG_VERBOSE")) fprintf(stderr,"[diag] one-shot timer cancelled by its own callback\n");
+    if (DIAG_FLAG("SH3_DIAG_VERBOSE")) fprintf(stderr,"[diag] one-shot timer cancelled by its own callback\n");
     diag_timer->self_killed=1;
     c->eax=0; c->esp+=8; /* callback returns zero to SDL and is not rescheduled */
 }
@@ -931,7 +1024,7 @@ static DiagMessageQueue *diag_window_queue;
 static pthread_once_t diag_window_queue_once=PTHREAD_ONCE_INIT;
 static void diag_window_queue_init(void) { diag_window_queue=diag_message_create(128); }
 int diag_movie_post_message(uint32_t hwnd,uint32_t message,uint32_t wparam,uint32_t lparam) {
-    if (!getenv("SH3_DIAG_MSG_QUEUE") || hwnd!=0x10010 || !message) return -1;
+    if (!DIAG_FLAG("SH3_DIAG_MSG_QUEUE") || hwnd!=0x10010 || !message) return -1;
     pthread_once(&diag_window_queue_once,diag_window_queue_init);
     DiagMessage m={hwnd,message,wparam,lparam,(uint32_t)SDL_GetTicks64(),0,0};
     return diag_message_post(diag_window_queue,&m);
@@ -945,7 +1038,7 @@ void imp_USER32_PeekMessageA(CPU *c) {
         fprintf(stderr,"[diag] unsupported PeekMessageA args\n"); exit(30);
     }
 #ifdef SH3_MOVIE_LAB
-    if (getenv("SH3_DIAG_MSG_QUEUE")) {
+    if (DIAG_FLAG("SH3_DIAG_MSG_QUEUE")) {
         if(c!=diag_main_cpu) { fprintf(stderr,"[diag] message peek from worker unsupported\n"); exit(30); }
         pthread_once(&diag_window_queue_once,diag_window_queue_init);
         DiagMessage m; int result=diag_message_peek(diag_window_queue,&m,(int)(a[4]&1));
@@ -957,7 +1050,7 @@ void imp_USER32_PeekMessageA(CPU *c) {
 }
 void imp_USER32_TranslateMessage(CPU *c) {
 #ifdef SH3_MOVIE_LAB
-    if (getenv("SH3_DIAG_MSG_QUEUE") && c==diag_main_cpu && c->esp<=DIAG_MEM_SIZE-8) {
+    if (DIAG_FLAG("SH3_DIAG_MSG_QUEUE") && c==diag_main_cpu && c->esp<=DIAG_MEM_SIZE-8) {
         uint32_t p; memcpy(&p,g_mem+c->esp+4,4);
         if (p && p<=DIAG_MEM_SIZE-28) {
             DiagMessage m; memcpy(&m,g_mem+p,sizeof m);
@@ -970,7 +1063,7 @@ void imp_USER32_TranslateMessage(CPU *c) {
 }
 void imp_USER32_DispatchMessageA(CPU *c) {
 #ifdef SH3_MOVIE_LAB
-    if(getenv("SH3_DIAG_MSG_QUEUE") && c==diag_main_cpu && c->esp<=DIAG_MEM_SIZE-8) {
+    if(DIAG_FLAG("SH3_DIAG_MSG_QUEUE") && c==diag_main_cpu && c->esp<=DIAG_MEM_SIZE-8) {
         uint32_t p; memcpy(&p,g_mem+c->esp+4,4);
         if(p && p<=DIAG_MEM_SIZE-28 && diag_window_proc) {
             DiagMessage m; memcpy(&m,g_mem+p,sizeof m);
@@ -988,7 +1081,7 @@ void imp_USER32_GetQueueStatus(CPU *c) {
     if(c->esp>DIAG_MEM_SIZE-8) { fprintf(stderr,"[diag] invalid GetQueueStatus stack\n"); exit(36); }
     memcpy(&flags,g_mem+c->esp+4,4);memcpy(&ret,g_mem+c->esp,4);
 #ifdef SH3_MOVIE_LAB
-    if(getenv("SH3_DIAG_MSG_QUEUE") && c==diag_main_cpu) {
+    if(DIAG_FLAG("SH3_DIAG_MSG_QUEUE") && c==diag_main_cpu) {
         pthread_once(&diag_window_queue_once,diag_window_queue_init);
         DiagMessage m; int n=diag_message_peek(diag_window_queue,&m,0);
         if(n==0) { fprintf(stderr,"[diag] GetQueueStatus empty flags=%08x caller=%08x\n",flags,ret); c->eax=0;c->esp+=8;return; }
@@ -1076,7 +1169,7 @@ void imp_USER32_GetKeyState(CPU *c) {
     memcpy(&key,g_mem+c->esp+4,4);
     unsigned button=key==1?SDL_BUTTON_LEFT:key==2?SDL_BUTTON_RIGHT:key==4?SDL_BUTTON_MIDDLE:0;
     if (!button) { fprintf(stderr,"[diag] GetKeyState key=%08x unsupported\n",key); exit(30); }
-    c->eax=(SDL_GetMouseState(NULL,NULL)&SDL_BUTTON(button))?0x8000u:0; c->esp+=8;
+    c->eax=((SDL_GetMouseState(NULL,NULL)&SDL_BUTTON(button))||(button==SDL_BUTTON_LEFT && vc_click))?0x8000u:0; c->esp+=8;
 }
 void imp_USER32_KillTimer(CPU *c) {
     uint32_t a[2];
@@ -1130,7 +1223,7 @@ void imp_KERNEL32_WaitForSingleObject(CPU *c) {
     static int wait_audit=-1; if (wait_audit<0) wait_audit=getenv("SH3_DIAG_MOVIE_WAIT_AUDIT")!=NULL;   /* per wait: read once */
     uint64_t movie_wait_start = wait_audit && movie_lab_receive_active(c) ? SDL_GetTicks64() : 0;
 #endif
-    if (getenv("SH3_DIAG_VERBOSE")) fprintf(stderr,"[diag] WaitForSingleObject handle=%08x timeout=%u\n",a[0],a[1]);
+    if (DIAG_FLAG("SH3_DIAG_VERBOSE")) fprintf(stderr,"[diag] WaitForSingleObject handle=%08x timeout=%u\n",a[0],a[1]);
 #if defined(SH3_MOVIE_HW_LAB) && defined(__vita__)
     /* Film loop 00404491: WaitForSingleObject(sample-ready event [0072c098], 100) before copying a sample into
        its texture. In direct AvPlayer mode no sample is ever delivered, so the original would always time out
@@ -1176,7 +1269,7 @@ void imp_KERNEL32_WaitForSingleObject(CPU *c) {
 #ifdef SH3_MOVIE_LAB
     diag_movie_wait_audit(c,a[0],a[1],r,movie_wait_start);
 #endif
-    if(getenv("SH3_DIAG_MUTEX_TRACE")) { uint32_t ret=0,tid=0; memcpy(&ret,g_mem+c->esp,4); if(c->fs_base<=DIAG_MEM_SIZE-0x28)memcpy(&tid,g_mem+c->fs_base+0x24,4); fprintf(stderr,"[diag] mutex wait h=%08x result=%d guest_tid=%u caller=%08x\n",a[0],r,tid,ret); }
+    if(DIAG_FLAG("SH3_DIAG_MUTEX_TRACE")) { uint32_t ret=0,tid=0; memcpy(&ret,g_mem+c->esp,4); if(c->fs_base<=DIAG_MEM_SIZE-0x28)memcpy(&tid,g_mem+c->fs_base+0x24,4); fprintf(stderr,"[diag] mutex wait h=%08x result=%d guest_tid=%u caller=%08x\n",a[0],r,tid,ret); }
     if (!r) c->eax=0;
     else if (r==EBUSY && a[1]==0) c->eax=258;
     else { fprintf(stderr,"[diag] waiting on busy object unsupported\n"); exit(30); }
@@ -1190,7 +1283,7 @@ void imp_KERNEL32_WaitForMultipleObjects(CPU *c) {
     if(a[0]<=64 && a[1]<=DIAG_MEM_SIZE-4*a[0]) for(unsigned i=0;i<a[0];i++) { uint32_t h;memcpy(&h,g_mem+a[1]+4*i,4);fprintf(stderr," %08x",h); }
     fputc('\n',stderr);
 #ifdef SH3_MOVIE_LAB
-    if(getenv("SH3_DIAG_MULTIWAIT_POLL") && a[0]>0 && a[0]<=64 && a[1] && a[1]<=DIAG_MEM_SIZE-4*a[0] && !a[2]) {
+    if(DIAG_FLAG("SH3_DIAG_MULTIWAIT_POLL") && a[0]>0 && a[0]<=64 && a[1] && a[1]<=DIAG_MEM_SIZE-4*a[0] && !a[2]) {
         DiagEvent *events[64]; unsigned acquired=0;
         for(unsigned i=0;i<a[0];i++) {
             uint32_t h;memcpy(&h,g_mem+a[1]+4*i,4);
@@ -1223,7 +1316,7 @@ void imp_KERNEL32_CreateEventA(CPU *c) {
     if (a[0] || a[3]) { fprintf(stderr,"[diag] unsupported named/security event\n"); exit(30); }
     c->eax=diag_event_handle_create(!!a[1],!!a[2]);
     if(!c->eax){diag_event_report();fprintf(stderr,"[diag] event creation failed\n");exit(36);} c->esp+=20;
-    if (getenv("SH3_DIAG_VERBOSE")) fprintf(stderr,"[diag] CreateEventA manual=%u initial=%u -> %08x\n",!!a[1],!!a[2],c->eax);
+    if (DIAG_FLAG("SH3_DIAG_VERBOSE")) fprintf(stderr,"[diag] CreateEventA manual=%u initial=%u -> %08x\n",!!a[1],!!a[2],c->eax);
 }
 static void diag_change_event(CPU *c,int value) {
     uint32_t h;
@@ -1335,7 +1428,7 @@ void imp_KERNEL32_ResumeThread(CPU *c) {
     int previous=diag_thread_resume(diag_threads[h-0xf8000000u]->thread);
     if (previous<0) { fprintf(stderr,"[diag] ResumeThread failed\n"); exit(36); }
     c->eax=(uint32_t)previous; c->esp+=8;
-    if (getenv("SH3_DIAG_VERBOSE")) fprintf(stderr,"[diag] ResumeThread %08x previous=%d\n",h,previous);
+    if (DIAG_FLAG("SH3_DIAG_VERBOSE")) fprintf(stderr,"[diag] ResumeThread %08x previous=%d\n",h,previous);
 }
 
 void imp_KERNEL32_SuspendThread(CPU *c) {
@@ -1346,7 +1439,7 @@ void imp_KERNEL32_SuspendThread(CPU *c) {
     if (h<0xf8000000u || h-0xf8000000u>=diag_thread_count || diag_threads[h-0xf8000000u]->tid!=tid) {
         fprintf(stderr,"[diag] external SuspendThread handle=%08x caller=%u unsupported\n",h,tid); exit(30);
     }
-    if (getenv("SH3_DIAG_VERBOSE")) fprintf(stderr,"[diag] guest worker %u suspends itself\n",tid);
+    if (DIAG_FLAG("SH3_DIAG_VERBOSE")) fprintf(stderr,"[diag] guest worker %u suspends itself\n",tid);
     if (diag_thread_self_suspend(diag_threads[h-0xf8000000u]->thread)) { fprintf(stderr,"[diag] self suspension failed\n"); exit(36); }
     c->eax=0; c->esp+=8;
 }
@@ -1356,7 +1449,7 @@ void imp_KERNEL32_ReleaseMutex(CPU *c) {
     if (c->esp>DIAG_MEM_SIZE-8) { fprintf(stderr,"[diag] invalid ReleaseMutex stack\n"); exit(36); }
     memcpy(&h,g_mem+c->esp+4,4);
     int r=(h<0xf1000000u || h-0xf1000000u>=diag_mutex_count) ? EINVAL : pthread_mutex_unlock(&diag_mutexes[h-0xf1000000u]);
-    if(getenv("SH3_DIAG_MUTEX_TRACE") || r) { uint32_t ret=0,tid=0; memcpy(&ret,g_mem+c->esp,4); if(c->fs_base<=DIAG_MEM_SIZE-0x28)memcpy(&tid,g_mem+c->fs_base+0x24,4); fprintf(stderr,"[diag] mutex release h=%08x result=%d guest_tid=%u caller=%08x\n",h,r,tid,ret); }
+    if(DIAG_FLAG("SH3_DIAG_MUTEX_TRACE") || r) { uint32_t ret=0,tid=0; memcpy(&ret,g_mem+c->esp,4); if(c->fs_base<=DIAG_MEM_SIZE-0x28)memcpy(&tid,g_mem+c->fs_base+0x24,4); fprintf(stderr,"[diag] mutex release h=%08x result=%d guest_tid=%u caller=%08x\n",h,r,tid,ret); }
     if(r==EPERM || r==EINVAL) {
         if(c->fs_base>DIAG_MEM_SIZE-0x38) { fprintf(stderr,"[diag] invalid mutex error TIB\n"); exit(36); }
         uint32_t error=r==EPERM?288u:6u; /* ERROR_NOT_OWNER / ERROR_INVALID_HANDLE */
@@ -1509,6 +1602,28 @@ void imp_KERNEL32_CreateDirectoryA(CPU *c) {
     uint32_t error=183; memcpy(g_mem+c->fs_base+0x34,&error,4); c->eax=0; c->esp+=12;
 }
 
+/* Every write of the save slots, data.sys and disp.ini goes to NAME.tmp and is renamed to NAME on CloseHandle, only if
+   something was written (audit 2026-11-17): the game opens these files with CREATE_ALWAYS, so a crash or a power loss
+   during a save (e.g. the open sleep/resume crash) used to leave a truncated save. Indexed by file slot. */
+static char diag_commit_path[64][256];
+/* Boot: a crash between "old file renamed to .bak" and "new file renamed in" leaves NAME missing and NAME.bak intact. */
+static void diag_recover_commits(void) {
+    const char *dirs[]={DIAG_SAVE_SCRATCH}; (void)dirs;
+    DIR *d=opendir(DIAG_SAVE_SCRATCH); if (!d) return;
+    struct dirent *e;
+    while ((e=readdir(d))) {
+        size_t n=strlen(e->d_name); if (n<5 || strcmp(e->d_name+n-4,".bak")) continue;
+        char bak[512],fin[512]; snprintf(bak,sizeof bak,"%s/%s",DIAG_SAVE_SCRATCH,e->d_name);
+        snprintf(fin,sizeof fin,"%s/%.*s",DIAG_SAVE_SCRATCH,(int)(n-4),e->d_name);
+        struct stat st; if (stat(fin,&st)) { if (!rename(bak,fin)) fprintf(stderr,"[diag] recovered %s from .bak\n",fin); }
+        else remove(bak);
+    }
+    closedir(d);
+}
+static int diag_open_tmp(const char *final) {
+    char tmp[272]; snprintf(tmp,sizeof tmp,"%s.tmp",final);
+    return open(tmp,O_WRONLY|O_CREAT|O_TRUNC|O_NOFOLLOW,0600);
+}
 void imp_KERNEL32_CreateFileA(CPU *c) {
     uint32_t a[7];
     if (c->esp>DIAG_MEM_SIZE-32) { fprintf(stderr,"[diag] invalid CreateFileA stack\n"); exit(36); }
@@ -1536,7 +1651,7 @@ void imp_KERNEL32_CreateFileA(CPU *c) {
         char name[4096];
         if (snprintf(name,sizeof name,"%s/data.%c%c%c",DIAG_SAVE_SCRATCH,slot[0],slot[1],slot[2])>=(int)sizeof name) exit(36);
         int writing=a[1]==0x40000000u;
-        int fd=open(name,(writing?(O_WRONLY|O_CREAT|O_TRUNC):O_RDONLY)|O_NOFOLLOW,0600);
+        int fd=writing?diag_open_tmp(name):open(name,O_RDONLY|O_NOFOLLOW);
         if (fd<0 && !writing && errno==ENOENT) {
             uint32_t error=2; memcpy(g_mem+c->fs_base+0x34,&error,4); c->eax=0xffffffffu; c->esp+=32; return;
         }
@@ -1545,7 +1660,8 @@ void imp_KERNEL32_CreateFileA(CPU *c) {
         FILE *f=fdopen(fd,writing?"wb":"rb"); if (!f) { close(fd); exit(36); }
         pthread_mutex_lock(&diag_object_lock); unsigned i=0; while(i<64 && diag_files[i]) i++;
         if (i==64) { pthread_mutex_unlock(&diag_object_lock); fclose(f); exit(36); }
-        diag_files[i]=f; pthread_mutex_unlock(&diag_object_lock);
+        diag_files[i]=f; if (writing) snprintf(diag_commit_path[i],sizeof diag_commit_path[i],"%s",name);
+        pthread_mutex_unlock(&diag_object_lock);
         fprintf(stderr,"[diag] diagnostic save slot %s -> %s\n",writing?"write":"read",name);
         c->eax=0xf5000000u+i; c->esp+=32; return;
     }
@@ -1615,8 +1731,12 @@ void imp_KERNEL32_CreateFileA(CPU *c) {
         unsigned i=0; while (i<64 && diag_files[i]) i++;
         if (i==64) { fprintf(stderr,"[diag] file table full\n"); exit(36); }
         const char *scratch=!strcasecmp((char *)g_mem+a[0],"C:\\SILENT HILL 3\\savedata\\data.sys") ? DIAG_SAVE_SCRATCH "/data.sys" : DIAG_SAVE_SCRATCH "/disp.ini";
-        int fd=open(scratch,O_WRONLY|O_CREAT|O_TRUNC|O_NOFOLLOW,0600);
+        /* disp.ini (Brightness gamma_r/g/b) goes through a .tmp renamed on close only if something was written: the
+           game truncates it at every boot ("wt" open/close in F_005f09f0) and only writes it on a clean exit or an
+           Brightness screen commit (console_reference_unit.py, F_005ed0f0); a killed app must keep the last written one. */
+        int fd=diag_open_tmp(scratch);
         diag_files[i]=fd<0?NULL:fdopen(fd,"wb");
+        if (diag_files[i]) snprintf(diag_commit_path[i],sizeof diag_commit_path[i],"%s",scratch);
         pthread_mutex_unlock(&diag_object_lock);
         if (!diag_files[i]) { fprintf(stderr,"[diag] cannot open scratch disp.ini\n"); exit(36); }
         fprintf(stderr,"[diag] write redirected to %s\n",scratch);
@@ -1654,6 +1774,18 @@ void imp_KERNEL32_CloseHandle(CPU *c) {
         if (k==8) { static unsigned victim; k=victim++&7u; fclose(diag_file_cache[k].f); }
         strcpy(diag_file_cache[k].path,diag_file_path[i]); diag_file_cache[k].f=diag_files[i];
     } else if (fclose(diag_files[i])) { pthread_mutex_unlock(&diag_object_lock); fprintf(stderr,"[diag] file close failed\n"); exit(36); }
+    if (diag_commit_path[i][0]) {
+        char tmp[272]; struct stat ts; snprintf(tmp,sizeof tmp,"%s.tmp",diag_commit_path[i]);
+        if (!stat(tmp,&ts) && ts.st_size>0) {
+            /* Vita rename does not replace: the old file is kept as NAME.bak until the new one is in place (a crash in
+               between is repaired at the next boot by diag_recover_commits), never deleted first. */
+            char bak[272]; snprintf(bak,sizeof bak,"%s.bak",diag_commit_path[i]);
+            remove(bak); int had=!rename(diag_commit_path[i],bak);
+            if (rename(tmp,diag_commit_path[i])) { fprintf(stderr,"[diag] %s rename failed\n",diag_commit_path[i]); if (had) rename(bak,diag_commit_path[i]); }
+            else { if (had) remove(bak); fprintf(stderr,"[diag] %s saved (%ld bytes)\n",diag_commit_path[i],(long)ts.st_size); }
+        } else remove(tmp);
+        diag_commit_path[i][0]=0;
+    }
     diag_files[i]=NULL; diag_file_game[i]=0; diag_file_path[i][0]=0; pthread_mutex_unlock(&diag_object_lock); c->eax=1; c->esp+=8;
 }
 
@@ -1672,7 +1804,7 @@ void imp_WINMM_mmioOpenA(CPU *c) {
     diag_mmio[i]=(DiagMmio){info[6],info[5],0};
     pthread_mutex_unlock(&diag_object_lock);
     c->eax=0xfa000000u+i; c->esp+=16;
-    if (getenv("SH3_DIAG_VERBOSE")) fprintf(stderr,"[diag] mmioOpenA memory=%08x size=%u -> %08x (experimental)\n",info[6],info[5],c->eax);
+    if (DIAG_FLAG("SH3_DIAG_VERBOSE")) fprintf(stderr,"[diag] mmioOpenA memory=%08x size=%u -> %08x (experimental)\n",info[6],info[5],c->eax);
     return;
 unsupported:
     fprintf(stderr,"[diag] unsupported mmioOpenA filename=%08x info=%08x flags=%08x\n",a[0],a[1],a[2]); exit(30);
@@ -1709,7 +1841,7 @@ again:
     }
     memcpy(g_mem+a[1],chunk,sizeof chunk);
     pthread_mutex_unlock(&diag_object_lock);
-    if (getenv("SH3_DIAG_VERBOSE")) fprintf(stderr,"[diag] mmioDescend chunk=%08x size=%u type=%08x offset=%u\n",chunk[0],chunk[1],chunk[2],chunk[3]);
+    if (DIAG_FLAG("SH3_DIAG_VERBOSE")) fprintf(stderr,"[diag] mmioDescend chunk=%08x size=%u type=%08x offset=%u\n",chunk[0],chunk[1],chunk[2],chunk[3]);
     c->eax=0; c->esp+=20; return;
 unsupported:
     fprintf(stderr,"[diag] unsupported mmioDescend handle=%08x chunk=%08x parent=%08x flags=%08x\n",a[0],a[1],a[2],a[3]); exit(30);
@@ -1728,7 +1860,7 @@ void imp_WINMM_mmioRead(CPU *c) {
     uint32_t n=a[2]; if (n>m->size-m->pos) n=m->size-m->pos;
     memmove(g_mem+a[1],g_mem+m->base+m->pos,n); m->pos+=n;
     pthread_mutex_unlock(&diag_object_lock);
-    if (getenv("SH3_DIAG_VERBOSE")) fprintf(stderr,"[diag] mmioRead requested=%u read=%u\n",a[2],n);
+    if (DIAG_FLAG("SH3_DIAG_VERBOSE")) fprintf(stderr,"[diag] mmioRead requested=%u read=%u\n",a[2],n);
     c->eax=n; c->esp+=16;
 }
 
@@ -1745,7 +1877,7 @@ void imp_WINMM_mmioAscend(CPU *c) {
     uint64_t end=(uint64_t)chunk[3]+chunk[1]+(chunk[1]&1u);
     if (end>m->size) { pthread_mutex_unlock(&diag_object_lock); goto unsupported; }
     m->pos=(uint32_t)end; pthread_mutex_unlock(&diag_object_lock);
-    if (getenv("SH3_DIAG_VERBOSE")) fprintf(stderr,"[diag] mmioAscend next=%u\n",(unsigned)end);
+    if (DIAG_FLAG("SH3_DIAG_VERBOSE")) fprintf(stderr,"[diag] mmioAscend next=%u\n",(unsigned)end);
     c->eax=0; c->esp+=16; return;
 unsupported:
     fprintf(stderr,"[diag] unsupported mmioAscend handle=%08x chunk=%08x flags=%08x\n",a[0],a[1],a[2]); exit(30);
@@ -1762,7 +1894,7 @@ void imp_WINMM_mmioSeek(CPU *c) {
     int64_t pos=origin+(int32_t)a[1];
     if (pos<0 || pos>m->size) { pthread_mutex_unlock(&diag_object_lock); goto unsupported; }
     m->pos=(uint32_t)pos; pthread_mutex_unlock(&diag_object_lock);
-    if (getenv("SH3_DIAG_VERBOSE")) fprintf(stderr,"[diag] mmioSeek offset=%d origin=%u -> %u\n",(int32_t)a[1],a[2],(unsigned)pos);
+    if (DIAG_FLAG("SH3_DIAG_VERBOSE")) fprintf(stderr,"[diag] mmioSeek offset=%d origin=%u -> %u\n",(int32_t)a[1],a[2],(unsigned)pos);
     c->eax=(uint32_t)pos; c->esp+=16; return;
 unsupported:
     fprintf(stderr,"[diag] unsupported mmioSeek handle=%08x offset=%d origin=%u\n",a[0],(int32_t)a[1],a[2]); exit(30);
@@ -1787,7 +1919,7 @@ static void diag_mmio_info(CPU *c,int set) {
         info[7]=m->base+m->pos; info[8]=m->base+m->size; info[9]=m->base+m->size;
         info[11]=m->pos; info[18]=a[0]; memcpy(g_mem+a[1],info,sizeof info);
     }
-    if (getenv("SH3_DIAG_VERBOSE")) fprintf(stderr,"[diag] mmio%sInfo position=%u\n",set?"Set":"Get",m->pos);
+    if (DIAG_FLAG("SH3_DIAG_VERBOSE")) fprintf(stderr,"[diag] mmio%sInfo position=%u\n",set?"Set":"Get",m->pos);
     pthread_mutex_unlock(&diag_object_lock);
     c->eax=0; c->esp+=16; return;
 unsupported:
@@ -1805,7 +1937,7 @@ void imp_WINMM_mmioClose(CPU *c) {
         pthread_mutex_unlock(&diag_object_lock); fprintf(stderr,"[diag] unsupported mmioClose\n"); exit(30);
     }
     diag_mmio[a[0]-0xfa000000u].size=0; pthread_mutex_unlock(&diag_object_lock);
-    if (getenv("SH3_DIAG_VERBOSE")) fprintf(stderr,"[diag] mmioClose %08x\n",a[0]); c->eax=0; c->esp+=12;
+    if (DIAG_FLAG("SH3_DIAG_VERBOSE")) fprintf(stderr,"[diag] mmioClose %08x\n",a[0]); c->eax=0; c->esp+=12;
 }
 
 void imp_KERNEL32_GetFileSize(CPU *c) {
@@ -1963,7 +2095,7 @@ void imp_ADVAPI32_RegOpenKeyA(CPU *c) {
     if (c->esp>DIAG_MEM_SIZE-16) { fprintf(stderr,"[diag] invalid RegOpenKeyA stack\n"); exit(36); }
     memcpy(a,g_mem+c->esp+4,sizeof a);
     if (!a[1] || a[1]>=DIAG_MEM_SIZE || !memchr(g_mem+a[1],0,DIAG_MEM_SIZE-a[1])) { fprintf(stderr,"[diag] invalid RegOpenKeyA key\n"); exit(36); }
-    if (getenv("SH3_DIAG_VERBOSE")) fprintf(stderr,"[diag] RegOpenKeyA root=%08x path=%.200s result=%08x\n",a[0],g_mem+a[1],a[2]);
+    if (DIAG_FLAG("SH3_DIAG_VERBOSE")) fprintf(stderr,"[diag] RegOpenKeyA root=%08x path=%.200s result=%08x\n",a[0],g_mem+a[1],a[2]);
     if (a[0]==0x80000002u && !strcasecmp((char *)g_mem+a[1],"SOFTWARE\\Microsoft\\Direct3D")) {
         c->eax=2; c->esp+=16; return; /* optional key absent in synthetic registry */
     }
@@ -2101,10 +2233,29 @@ void imp_KERNEL32_GetACP(CPU *c) {
     c->eax=1252; c->esp+=4;
 }
 
+/* Initial game language (used only when no data.sys exists yet: first launch, F_0060d190 via F_005f12c0). Like sh4vita, the
+   preparer writes "language": "French|English|German|Italian|Spanish" in sh3vita.json next to the game data; without it
+   the game starts in English. PC bench: env SH3_LANGUAGE overrides (default French, the development configuration). */
+static uint32_t diag_language_id(void) {
+    static const struct { const char *name; uint32_t id; } map[]={{"French",0x040c},{"English",0x0409},{"German",0x0407},{"Italian",0x0410},{"Spanish",0x0c0a}};
+    char value[32]={0};
+#ifdef __vita__
+    FILE *f=fopen("ux0:data/sh3/sh3vita.json","rb");
+    if (f) {
+        char buf[2048]; size_t n=fread(buf,1,sizeof buf-1,f); fclose(f); buf[n]=0;
+        const char *k=strstr(buf,"\"language\""); const char *q=k?strchr(k+10,'"'):NULL;
+        if (q) { q++; size_t i=0; while (q[i] && q[i]!='"' && i<sizeof value-1) { value[i]=q[i]; i++; } value[i]=0; }
+    }
+    if (!value[0]) strcpy(value,"English");
+#else
+    const char *e=getenv("SH3_LANGUAGE"); snprintf(value,sizeof value,"%s",e&&*e?e:"French");
+#endif
+    for (unsigned i=0;i<sizeof map/sizeof *map;i++) if (!strcmp(value,map[i].name)) { fprintf(stderr,"[diag] initial game language: %s\n",value); return map[i].id; }
+    fprintf(stderr,"[diag] unknown initial language \"%s\", English used\n",value); return 0x0409;
+}
 void imp_KERNEL32_GetUserDefaultLangID(CPU *c) {
     if (c->esp>DIAG_MEM_SIZE-4) { fprintf(stderr,"[diag] invalid language stack\n"); exit(36); }
-    c->eax=0x040c; c->esp+=4; /* synthetic French (France) for this diagnostic */
-    fprintf(stderr,"[diag] synthetic user language: fr-FR\n");
+    c->eax=diag_language_id(); c->esp+=4;
 }
 
 void imp_KERNEL32_IsProcessorFeaturePresent(CPU *c) {
@@ -2679,25 +2830,43 @@ static int diag_pace60_scene(CPU *c) {
     return (g_pace60_all_rooms || (stage==33 && room==210)) &&
            freq==1000000000ull && g_mem[0x72c820u];
 }
+int g_fps_mode_override=-1;   /* frame-rate setting override (marker fpsmode), see diag_pace60_policy */
 #ifdef SH3_FRAME_POLICY_LAB
 extern void F_005f15e0_translated(CPU *c);
-int diag_pace60_policy(CPU *c) {
-    if (!diag_pace60_scene(c)) return 0;
-    if (g_pace60_even) { uint32_t req; memcpy(&req,g_mem+0x72c7e8u,4); if (req<3) return 0; }   /* engine adaptive path: even 2-tick steps */
+/* Frame-rate setting (Options row 9, saved control-type byte 0x70e66cd; Valentin 2026-11-16 - the Vita screen is 60 Hz,
+   never above 60):
+   0 = "60" (default): fixed steps only, 60, 30 or 20 images/s - the engine's own adaptive target of 1, 2 or 3 ticks
+       (F_005f15e0, limiter waits whole ticks, so frames are exactly 16.7 / 33.3 / 50 ms; below 20 it simply drops).
+   1 = "30": same, but the target never goes below 2 ticks: 30 or 20.
+   2 = "unlimited": variable, at most 60 - the original force-60 path (target one tick, the logic consumes the ticks
+       actually elapsed, 1..3) in gameplay; menus/loadings keep the engine's adaptive target, also at most 60.
+   Marker fpsmode (0/1/2) / env SH3_FPS_MODE overrides the saved value for benches. */
+static unsigned diag_fps_mode(void) {
+    return g_fps_mode_override>=0?(unsigned)g_fps_mode_override:g_mem[0x70e66cdu];
+}
+static void diag_pace_force60(CPU *c) {
     /* Original force-60 path also publishes the ACTUAL consumed ticks to
        bcc630, which F_0060da50 uses for simulation dt. Changing only the
        low-level target would leave adaptive requested ticks driving physics. */
     uint8_t saved=g_mem[0xbcc63eu];g_mem[0xbcc63eu]=1;
     F_005f15e0_translated(c);
     g_mem[0xbcc63eu]=saved;
-    /* Separate causal test: the original adaptive path caps its logical
-       step at three ticks, unlike force-60 after a long loading/capture stall. */
+    /* The original adaptive path caps its logical step at three ticks, unlike force-60 after a long loading stall. */
     uint32_t raw,selected;memcpy(&raw,g_mem+0xbcc630u,4);selected=raw;
     if (g_pace60_clamp && raw>3) { selected=3;memcpy(g_mem+0xbcc630u,&selected,4); }
     { static unsigned reported;
       if (raw>3 && reported++<20)
           fprintf(stderr,"[pace-policy] ms=%llu raw_ticks=%u selected_ticks=%u clamp=%d\n",
               (unsigned long long)SDL_GetTicks64(),raw,selected,g_pace60_clamp);
+    }
+}
+int diag_pace60_policy(CPU *c) {
+    unsigned mode=c==diag_main_cpu?diag_fps_mode():0;
+    if (mode==2 && diag_pace60_scene(c)) { diag_pace_force60(c); return 1; }
+    F_005f15e0_translated(c);
+    if (mode==1 && c==diag_main_cpu) {
+        uint32_t target; memcpy(&target,g_mem+0x72c7e8u,4);
+        if (target<2) { target=2; memcpy(g_mem+0x72c7e8u,&target,4); }
     }
     return 1;
 }
@@ -2784,7 +2953,7 @@ void __wrap_F_0041b2c0(CPU *c) {
         memcpy(&requested,g_mem+0x72c7e8u,4);
         if (g_pace60_park && diag_pace60_scene(c) && requested>=1 && requested<=60 && freq==1000000000ull) {
             lab_active=1;
-            if (requested>1 && (!g_pace60_even || requested>=3)) { uint32_t one=1; memcpy(g_mem+0x72c7e8u,&one,4); pace60=1; }
+            if (requested>1 && (!g_pace60_even || (g_fps_mode_override>=0?(unsigned)g_fps_mode_override:g_mem[0x70e66cdu])==2u)) { uint32_t one=1; memcpy(g_mem+0x72c7e8u,&one,4); pace60=1; }
         }
     }
     { static int previous=-1;
@@ -3122,6 +3291,7 @@ static void boot_error(const char *const *lines, int n) {
 }
 static int boot_stat(const char *path, SceIoStat *st) { return sceIoGetstat(path, st) >= 0; }
 static void boot_checks(void) {
+    diag_recover_commits();
     SceIoStat st;
     if (!boot_stat("ux0:data/sh3/sh3.exe", &st) || !boot_stat("ux0:data/sh3/data", &st)) {
         static const char *const m[] = {"GAME FILES NOT FOUND", "", "Expected in ux0:data/sh3/", "", "Run sh3prep on your PC with your own copy", "of the game, then copy the sh3 folder", "to ux0:data/ on the Vita (see README)."};
@@ -3149,7 +3319,11 @@ int main(int argc, char **argv) {
     sceIoMkdir("ux0:data/sh3/movie",0777);
     sceIoMkdir("ux0:data/sh3/cache",0777);
     sceIoMkdir("ux0:data/sh3/savedata",0777);
+    /* Test build logs: keep the previous session (a crash followed by a relaunch must not erase its log). */
+    remove("ux0:data/sh3/diag/diag-prev.log");
+    rename("ux0:data/sh3/diag/diag.log","ux0:data/sh3/diag/diag-prev.log");
     freopen("ux0:data/sh3/diag/diag.log","w",stderr);
+    fprintf(stderr,"[session] sh3vita test build " __DATE__ " " __TIME__ "; previous session kept in diag-prev.log\n");
     boot_checks();
     extern int diag_tls_verify(void);
     if (diag_tls_verify()) return 5;
@@ -3379,6 +3553,13 @@ int main(int argc, char **argv) {
 #endif
     if (unlink("ux0:data/sh3/diag/probenoread") == 0) { setenv("SH3_PROBE_NOREAD","1",1); fprintf(stderr,"[diag] probe emulation without GPU readback\n"); }
     if (unlink("ux0:data/sh3/diag/pace60force") == 0) { g_pace60_even=0; fprintf(stderr,"[pace] forced one-tick target restored (A/B)\n"); }
+    {   /* bench override of the frame-rate setting: marker fpsmode / env SH3_FPS_MODE = 0 (60), 1 (30), 2 (unlimited) */
+        extern int g_fps_mode_override; int v=-1;
+        FILE *m=fopen("ux0:data/sh3/diag/fpsmode","rb");
+        if (m) { v=fgetc(m); fclose(m); if (unlink("ux0:data/sh3/diag/fpsmode")) return 5; }
+        else if (getenv("SH3_FPS_MODE")) v=getenv("SH3_FPS_MODE")[0];
+        if (v>='0' && v<='2') { g_fps_mode_override=v-'0'; fprintf(stderr,"[fps] frame-rate setting forced to %d (0=60 1=30 2=unlimited)\n",g_fps_mode_override); }
+    }
     { FILE *m=fopen("ux0:data/sh3/diag/pace60park","rb"); if (m) {
 #ifndef SH3_FRAME_POLICY_LAB
         fclose(m);fprintf(stderr,"[diag] pace60park requires SH3_FRAME_POLICY_LAB (simulation coupling)\n");return 5;
@@ -3545,6 +3726,22 @@ int main(int argc, char **argv) {
         setenv("SH3_DIAG_TINYLOG","1",1);
     }
     /* The Vita display is widescreen; retain a one-shot 4:3 comparison mode. */
+    FILE *blood_audit=fopen("ux0:data/sh3/diag/bloodaudit","rb");
+    if(blood_audit) {
+        fclose(blood_audit);
+        if(unlink("ux0:data/sh3/diag/bloodaudit"))return 5;
+        setenv("SH3_BLOOD_AUDIT","1",1);
+    }
+    FILE *blood_packet=fopen("ux0:data/sh3/diag/bloodpacket","rb");
+    if(blood_packet) {
+        int mode=fgetc(blood_packet),tail=fgetc(blood_packet);
+        int valid=(mode=='0'||mode=='1') && (tail==EOF || (tail=='\n' && fgetc(blood_packet)==EOF));
+        fclose(blood_packet);
+        if(!valid){fprintf(stderr,"[blood-packet] expected 0 or 1\n");return 5;}
+        if(unlink("ux0:data/sh3/diag/bloodpacket"))return 5;
+        setenv("SH3_BLOOD_PACKET_PASS",mode=='1'?"1":"0",1);
+        fprintf(stderr,"[blood-packet] world projection override=%c\n",mode);
+    }
     FILE *wide_test=fopen("ux0:data/sh3/diag/wide","rb");
     if (wide_test) {
         fclose(wide_test);
@@ -3939,6 +4136,9 @@ int main(int argc, char **argv) {
     rt_prof_start();
 #endif
     if (getenv("SH4_CPU_TIME")) diag_calibrate();
+#ifdef _WIN32
+    { HANDLE h=NULL; if (DuplicateHandle(GetCurrentProcess(),GetCurrentThread(),GetCurrentProcess(),&h,0,FALSE,DUPLICATE_SAME_ACCESS)) diag_main_thread_handle=h; }
+#endif
     SDL_CreateThread(diag_freeze_watch,"freeze_watch",NULL);
     rt_call(&cpu,layout.entry);
     fprintf(stderr,"[diag] guest entry returned eax=%08x\n",cpu.eax);

@@ -1,7 +1,7 @@
 //! The seven PC movies (`data/movie/*.000`) are MPEG program streams obfuscated with a 32-bit LCG keystream.
 //!
 //! Scheme (found by reading the game's own movie reader, FUN_00405680 in sh3.exe, and cross-checked against the
-//! reference description in AngeloGalav/sh3-vita `tools/j3_movie.py`, GPL-3.0):
+//! a published description of the container format):
 //!  * the file starts with a 0x8000-byte block whose plaintext is all zeros; four bytes of its ciphertext, at fixed
 //!    offsets, give the seed: `f[0x2dde] | f[0x3d40]<<8 | f[0x2a5c]<<16 | f[0x55e2]<<24`;
 //!  * LCG: `state = state * 0x5d588b65 + 1` (MSVC `rand()` multiplier);

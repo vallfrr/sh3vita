@@ -13,6 +13,7 @@ shim = r'''
 #include <stdio.h>
 #include <stdlib.h>
 typedef struct { uint32_t esp, eax, eflags; } CPU;
+static unsigned g_audit_particle_draw_skipped;
 '''
 test = r'''
 #include <assert.h>

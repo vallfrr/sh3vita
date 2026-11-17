@@ -103,13 +103,18 @@ fn walk(dir: &Path, rel: &Path, out: &mut Vec<(PathBuf, PathBuf)>) -> io::Result
     Ok(())
 }
 
+/// Initial game languages, canonical names written in sh3vita.json (same names as sh4vita.json).
+pub const LANGUAGES: [&str; 5] = ["English", "French", "German", "Italian", "Spanish"];
+
 /// Copies the files into `<out>/sh3/` (files already copied at the right size are skipped), decrypts the movies into
 /// `<out>/sh3/movie/` (and converts them to MP4 when `convert_movies` is set and ffmpeg is installed), then writes
-/// `sh3vita.json`. `progress(bytes done, current file)`.
+/// `sh3vita.json` with the initial game language (one of `LANGUAGES`, read by the port on first launch, like sh4vita).
+/// `progress(bytes done, current file)`.
 pub fn prepare(
     plan: &Plan,
     out: &Path,
     convert_movies: bool,
+    language: &str,
     mut progress: impl FnMut(u64, &Path),
 ) -> Result<(PathBuf, MovieReport), Error> {
     let dst_root = out.join("sh3");
@@ -159,7 +164,7 @@ pub fn prepare(
         }
     }
     let manifest = format!(
-        "{{\n  \"format\": 1,\n  \"exe_sha256\": \"{EXE_SHA256}\",\n  \"files\": {},\n  \"bytes\": {},\n  \"movies_decrypted\": {},\n  \"movies_mp4\": {},\n  \"created_by\": \"sh3prep {}\"\n}}\n",
+        "{{\n  \"format\": 1,\n  \"exe_sha256\": \"{EXE_SHA256}\",\n  \"language\": \"{language}\",\n  \"files\": {},\n  \"bytes\": {},\n  \"movies_decrypted\": {},\n  \"movies_mp4\": {},\n  \"created_by\": \"sh3prep {}\"\n}}\n",
         plan.files.len(),
         plan.bytes,
         report.decrypted,
@@ -175,6 +180,14 @@ pub fn prepare(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn interface_languages_match_game_languages() {
+        // The interface selector also chooses the initial game language: same count and order.
+        assert_eq!(LANGUAGES.len(), crate::i18n::TEXT.len());
+        assert_eq!(LANGUAGES.len(), crate::i18n::NAMES.len());
+        assert_eq!(LANGUAGES[0], "English");
+    }
 
     #[test]
     fn refuses_wrong_exe() {

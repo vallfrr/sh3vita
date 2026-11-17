@@ -1,6 +1,6 @@
 //! sh3prep: prepares the Silent Hill 3 files (PC) for the PS Vita port.
 //! Without arguments: graphical interface. Otherwise:
-//! `sh3prep <game folder> <output folder> [--no-movies]`
+//! `sh3prep <game folder> <output folder> [--no-movies] [--language English|French|German|Italian|Spanish]`
 mod gui;
 mod i18n;
 mod movie;
@@ -15,17 +15,22 @@ fn main() {
         return;
     }
     if args.len() < 2 || args[0] == "-h" || args[0] == "--help" {
-        eprintln!("usage: sh3prep <game folder> <output folder> [--no-movies]\n  <game folder> contains sh3.exe and data/\n  --no-movies   do not convert the movies to MP4 (they then play at about 20 fps)");
+        eprintln!("usage: sh3prep <game folder> <output folder> [--no-movies] [--language NAME]\n  <game folder> contains sh3.exe and data/\n  --no-movies   do not convert the movies to MP4 (they then play at about 20 fps)\n  --language    initial game language: English (default), French, German, Italian, Spanish");
         std::process::exit(2);
     }
     let convert = !args.iter().skip(2).any(|a| a == "--no-movies");
+    let language = args.iter().skip(2).position(|a| a == "--language").and_then(|i| args.get(i + 3)).map(String::as_str).unwrap_or("English");
+    if !prep::LANGUAGES.contains(&language) {
+        eprintln!("error: unknown language {language} (English, French, German, Italian, Spanish)");
+        std::process::exit(2);
+    }
     let plan = prep::check(Path::new(&args[0])).unwrap_or_else(|e| {
         eprintln!("error: {e}");
         std::process::exit(1)
     });
     println!("{} files, {:.2} GB", plan.files.len(), plan.bytes as f64 / 1e9);
     let mut last = 0;
-    let (out, report) = prep::prepare(&plan, Path::new(&args[1]), convert, |done, _| {
+    let (out, report) = prep::prepare(&plan, Path::new(&args[1]), convert, language, |done, _| {
         let pct = done * 100 / plan.bytes.max(1);
         if pct != last {
             last = pct;

@@ -13,6 +13,7 @@ shim=r'''
 #include <string.h>
 #define SH3_MOVIE_LAB 1
 #define DIAG_MEM_SIZE 64u
+#define DIAG_FLAG(name) ({ static int _df=-1; if (_df<0) _df=getenv(name)!=NULL; _df; })
 typedef struct { uint32_t esp,eax; } CPU;
 typedef struct { uint32_t hwnd,message,wparam,lparam,time,x,y; } DiagMessage;
 static uint8_t memory[64],*g_mem=memory;

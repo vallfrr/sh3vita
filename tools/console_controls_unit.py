@@ -19,8 +19,10 @@ SIGNATURES = {
  '0060cc90': '2acac29ace4a757b68e451906e7d315f52db8ea7ea2cc216874bed184d3c5178',
  '005e3f90': '1ba46c9f6510ef2adcabb37f370b25b5c72bb6770f4ea366ac8f77f540b5e01b',
  '005e3560': '2320276a5c8c6a2a2c719488e9899d628f4e6cc5df2836c31a032c10773ad5e5',
+ '0060d190': '4cbe4a4f3b8c4a06c8b354a8b65ec5af8bf3c7a2b0dc43366856769329b9de10',
  '005e8270': '2e289bec861f7e64814b6351b094d7ca48b4bc0135b17b81ab74dc995334aaa0',
  '005e88b0': '4760372a49d4075a74e02fff64a16542b9857f3cbb47ead8a0780a6d3e1baa80',
+ '0058edb0': '949d68c34a7a645ab22b39c9ffc5fedb7f98f9a1d5a0b383f37f935f4e7397b7',
  '005e35e0': '6985c5a61fce46804fa7f1c16db7dcd066082640af964e61f45c66575dd75d39',
 }
 PAGE_BODY = """  /* Two pages only (Main <-> Extra): the PC Configuration page is retired, its Gamma row sits on page 1. */
@@ -87,6 +89,27 @@ def replace(source):
             old='  // 0x5e8b78: push 6\n  { uint32_t v=0x6u; esp-=4; W32(esp,v); }'
             assert body.count(old)==1
             body=body.replace(old,'  // 0x5e8b78: push 0xe (Options), return flag F_005e3110: 2 = back to the game on exit (1 = inventory, 0 = title)\n  g_mem[0xbcc17du]=2; sh3_pause_reopen=45; sh3_pause_cursor=3u; { uint32_t v=0xeu; esp-=4; W32(esp,v); }')
+        elif name=='0058edb0':
+            # Options left from the pause menu (return flag 2, see 005e88b0): take the native in-game path (flag 1, the
+            # inventory's Options) so changed settings are written to data.sys (system save, state 0x13, return target 4),
+            # but come back to the game (state 5) instead of the inventory (state 6). Before, flag 2 went straight to
+            # state 5 and the settings (Brightness...) were lost at the next boot (Valentin, 2026-11-16).
+            old='  if ((fa!=fb)) goto L_0058f504;\n'
+            assert body.count(old)==1
+            body=body.replace(old,'  sh3_options_to_game=(fa==fb); goto L_0058f504; /* flag 2 = flag 1 + return to the game; set on every Options exit */\n')
+            old='L_0058f486:;\n  // 0x58f486: push 6\n  { uint32_t v=0x6u; esp-=4; W32(esp,v); }'
+            assert body.count(old)==1
+            body=body.replace(old,'L_0058f486:;\n  // 0x58f486: push 6 (5 when leaving pause Options unchanged)\n  { uint32_t v=sh3_options_to_game?0x5u:0x6u; sh3_options_to_game=0; esp-=4; W32(esp,v); }')
+            old='  // 0x58f94e: mov esi, 6\n  esi=(uint32_t)(0x6u);'
+            assert body.count(old)==1
+            body=body.replace(old,'  // 0x58f94e: mov esi, 6 (5 after the system save of pause Options)\n  esi=sh3_options_to_game?0x5u:0x6u; /* re-run each frame until the save ends: no reset here */')
+            body='static int sh3_options_to_game;\n'+body
+        elif name=='0060d190':
+            # Default settings of a new configuration: the film-grain effect ("Bruitage", Options Extra, byte 0x70e66cf)
+            # starts OFF (Valentin, 2026-11-16). An existing configuration keeps its saved value.
+            old='  W8((uint32_t)(0x70e66cfu),0x1u);'
+            assert body.count(old)==1
+            body=body.replace(old,'  W8((uint32_t)(0x70e66cfu),0x0u); /* film grain off by default */')
         elif name=='005e8270':
             # Per-frame pause opener: back from Options (see 005e88b0), reopen the pause menu with the cursor on Options.
             needle='  // 0x5e828d: call 0x5f1320'
@@ -104,17 +127,23 @@ def replace(source):
             body=body.replace('  // 0x5e24f8:', 'L_005e24f8:;\n  // 0x5e24f8:')
         elif name=='005e4310':
             # Row 5 (former Vibration) is kept visible: Gamma correction takes its place (see 005e3f90).
-            old='W8((uint32_t)(0xbcc18bu),(ebx&0xffu));'
-            assert body.count(old)==1
-            body=body.replace(old,'W8((uint32_t)(0xbcc18bu),0); /* Type3D row excluded from navigation. */')
+            # Row 9 (former control type) stays visible: it is the frame-rate setting (0 = 60, 1 = 30, 2 = unlimited).
+            pass
         elif name=='005e4c60':
             body='void F_005e4c60(CPU *c) { c->esp+=4; }'
         elif name=='005e4e50':
-            body='void F_005e4e50(CPU *c) { g_mem[0xbcc1a8u]=0; c->esp+=4; }'
+            # Row 9 cycles 60 -> 30 -> unlimited (value+1 modulo 3) instead of toggling two values.
+            old='  { uint32_t r=(eax&0xffu)&0x1u; fr=r; cf=0; of=0; zf=(r==0);sf=(r>>7)&1u;pf=PF(r); eax=(eax&0xffffff00u)|((uint32_t)(r)&0xffu); }'
+            assert body.count(old)==1
+            body=body.replace(old,'  { uint32_t a=eax&0xffu; uint32_t r=(((a+1u)&0xffu)+1u)%3u; fr=r; cf=0; of=0; zf=(r==0);sf=0;pf=PF(r); eax=(eax&0xffffff00u)|r; } /* frame-rate setting: 3 values */')
         elif name=='0060cc80':
-            body='void F_0060cc80(CPU *c) { g_mem[0x70e66cdu]=0; c->eax&=0xffffff00u; c->esp+=4; }'
+            # The saved control-type byte now holds the frame-rate setting (diag_fps_mode in diag_runtime.c).
+            body='void F_0060cc80(CPU *c) { g_mem[0x70e66cdu]=g_mem[c->esp+4u]; c->eax=(c->eax&0xffffff00u)|g_mem[c->esp+4u]; c->esp+=4; }'
         else:
-            body='void F_0060cc90(CPU *c) { g_mem[0x70e66cdu]=0; c->eax&=0xffffff00u; c->esp+=4; }'
+            # Options screen (callers 0x5e4000..0x5e5fff) sees the frame-rate setting; gameplay always gets Type2D (1):
+            # Valentin, 2026-11-16 after playing the PS2 original: the 2D type (the stick direction is the walking direction) is the wanted scheme.
+            body=('void F_0060cc90(CPU *c) { uint32_t ret=g_mem[c->esp]|g_mem[c->esp+1u]<<8|g_mem[c->esp+2u]<<16|(uint32_t)g_mem[c->esp+3u]<<24;\n'
+                  '  c->eax=(c->eax&0xffffff00u)|(ret>=0x5e4000u && ret<0x5e6000u ? g_mem[0x70e66cdu] : 1u); c->esp+=4; }')
         source=source[:m.start()]+body+source[m.end():]
         found+=1
     if found not in (1,2,3,6,7,10): raise ValueError('Missing native controls/display functions')
