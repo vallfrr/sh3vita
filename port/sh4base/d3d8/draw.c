@@ -1776,7 +1776,9 @@ static int fx_route(Device *d,uint32_t prim,uint32_t first,uint32_t n,const void
         d->tss[0][1]==4 && d->tss[0][2]==2 && d->tss[0][3]<=1 &&
         d->tss[0][4]==4 && d->tss[0][5]==2 && d->tss[0][6]<=1 && d->tss[1][1]==1 &&
         d->tex[0] && d->tex[0]!=d->rt->tex && !d->cube[0];
-    for (int s=1;s<MAX_STAGES && eligible;s++) if (d->tex[s] || d->cube[s]) eligible=0;
+    /* Stage 1 is DISABLED (checked above), so D3D ignores every later stage: a texture left bound there (the hospital
+       fog particles keep a stale cube map at stage 3) does not take part in the draw. Was "any texture on stages 1+",
+       which kept fxhalf off in every hospital room (2026-11-18 drawlog 28:183: 180 additive quads in one run, 0 routed). */
     if (eligible) {
         Buffer *vb=d->stream[0].vb;
         const uint8_t *data=up?up:(inl && inl[0]?inl[0]:(vb?g_mem+vb->mem:NULL));
