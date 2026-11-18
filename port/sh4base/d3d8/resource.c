@@ -384,6 +384,13 @@ Texture *tex_create(uint32_t w, uint32_t h, uint32_t levels, uint32_t usage, uin
     if (!levels || levels > maxl) levels = maxl;
     Texture *t = calloc(1, sizeof *t);
     t->w = w; t->h = h; t->levels = levels; t->usage = usage; t->fmt = fmt; t->pool = pool;
+    {   /* texfree: only textures created once gameplay has started (rooms) may release their copy. The interface ones made
+           at boot (the title font, filled in several Locks) keep it: releasing it lost the lowercase letters of the title
+           menu at every launch (tester report, 1.0.0). */
+        static int gameplay_seen; uint32_t ui = 0;
+        if (!gameplay_seen && g_mem_size > 0xbcc664u) { memcpy(&ui, g_mem + 0xbcc660u, 4); gameplay_seen = ui == 5; }
+        t->tf_keep = !gameplay_seen;
+    }
     t->lv = calloc(levels, sizeof *t->lv);
     for (uint32_t l = 0; l < levels; l++) {
         uint32_t lw = w >> l, lh = h >> l;
