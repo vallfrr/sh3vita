@@ -351,6 +351,21 @@ M(BeginScene) {
 M(EndScene) { HOSTFN; DEV; d->in_scene = 0; STDRET(1, HR_OK); }
 M(Clear) {
     HOSTFN; DEV;
+    {   /* Test-build log (bounded): clear colours used on the inventory screen (ui 6), whose 4:3 layers leave the sides
+           showing the cleared surface (orange bands in the mall's outdoor street). */
+        uint32_t ui = R32(0xbcc660u);
+        if (ui == 6 && (ARG(4) & 1u)) { static uint32_t seen[32]; static unsigned n; unsigned i = 0;
+            for (; i < n; i++) if (seen[i] == ARG(5)) break;
+            if (i == n && n < 32) { seen[n++] = ARG(5); rt_log("[inv-clear] color=%08x flags=%x stage=%u room=%u frame=%u\n", ARG(5), ARG(4),
+                (unsigned)g_mem[0x70e66d9u], R32(0x897e48u), g_frame); } }
+        /* The inventory clears the screen with the room's fog colour and then draws its 4:3 layers: in rooms with a light
+           fog the sides showed coloured bands (orange in the mall's outdoor street, tester report). The full-screen target
+           is cleared black on that screen, like the rest of the game's 4:3 sides; the small scene view keeps its colour. */
+        if (ui == 6 && (ARG(4) & 1u) && d->rt && d->rt->w >= 960 && d->rt->h >= 544) {
+            prep_clear(ARG(4), ARG(5) & 0xff000000u, rt_f32(ARG(6)), ARG(7), (int)ARG(2), ARG(3));
+            STDRET(7, HR_OK);
+        }
+    }
     prep_clear(ARG(4), ARG(5), rt_f32(ARG(6)), ARG(7), (int)ARG(2), ARG(3));
     STDRET(7, HR_OK);
 }
