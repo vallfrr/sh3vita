@@ -14,7 +14,7 @@ You may use your own copy of the game.
 
 ## What you need
 
-- A hacked PS Vita (HENkaku/Enso), at least 6 GB free on `ux0:`
+- A hacked PS Vita (HENkaku/Enso), at least 5 GB free on `ux0:`
 - Silent Hill 3 for PC can be found on myabandonware, US version needed with the five zip files), with this exact executable: `sh3.exe`, 3,338,240 bytes, SHA-256 `a51f956bd5be21fd704c4d19cf0674a175d002081da43b1d377be83226c36e5e`. No other version works (no PS2 files either).
 - `ur0:data/libshacccg.suprx` from your own Vita (ShaRKF00D).
 - `sh3vita.vpk` and the `sh3prep` download for your computer from the [Releases](../../releases) page
@@ -140,7 +140,7 @@ In the Options screen, **L** and **R** switch between the pages.
 
 ## Status
 
-**Version 1.0** The game is playable from start to finish on a real PS Vita, all major and minor bugs encountered by me or the testers are now fixed.
+**Version 1.0.1** The game is playable from start to finish on a real PS Vita, all major and minor bugs encountered by me or the testers are now fixed.
 
 | Area | State |
 |:--|:--|
