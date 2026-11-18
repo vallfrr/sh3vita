@@ -1,6 +1,6 @@
 [package]
 name = "sh3prep"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2021"
 description = "Prepares the Silent Hill 3 files (PC version) for the sh3vita PS Vita port"
 license = "GPL-3.0-or-later"

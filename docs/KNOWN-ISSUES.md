@@ -1,6 +1,6 @@
 # Known issues
 
-State of the PS Vita build, version 1.0.0, the first official release (November 2026). "Console" means seen on a real PS Vita.
+State of the PS Vita build, version 1.0.1 (November 2026). "Console" means seen on a real PS Vita.
 
 ## Open
 

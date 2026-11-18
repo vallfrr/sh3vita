@@ -50,7 +50,12 @@ void w32_host_path(const char *guest,char *out,size_t n) {
         else if (as && !strcasecmp(base,"op.000")) continue;
         if (!strcasecmp(base,expected)) {
 #ifdef __vita__
-            int len=snprintf(out,n,"ux0:data/sh3/movie/%s.mpg",names[i]);
+            /* The prepared .mp4 (hardware decoder) is used directly when present; the .mpg is only the fallback for
+               the software decoder, so a prepared folder can hold the .mp4 alone (1.0.1: ~950 MB less). */
+            int len=snprintf(out,n,"ux0:data/sh3/movie/%s.mp4",names[i]);
+            FILE *mp4=len>0 && (size_t)len<n ? fopen(out,"rb") : NULL;
+            if (mp4) fclose(mp4);
+            else len=snprintf(out,n,"ux0:data/sh3/movie/%s.mpg",names[i]);
 #else
             int len=snprintf(out,n,"build/pc-movie-lab/%s.mpg",names[i]);
 #endif

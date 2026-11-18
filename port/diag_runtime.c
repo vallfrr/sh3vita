@@ -3316,7 +3316,7 @@ static void boot_checks(void) {
         static const char *const m[] = {"UNSUPPORTED sh3.exe", "", "The executable in ux0:data/sh3/ is not the", "supported version (3,338,240 bytes).", "See the README for the exact file, then", "prepare your files again with sh3prep."};
         boot_error(m, 6); sceKernelExitProcess(0);
     }
-    if (!boot_stat("ux0:data/sh3/movie/op.mpg", &st)) {
+    if (!boot_stat("ux0:data/sh3/movie/op.mp4", &st) && !boot_stat("ux0:data/sh3/movie/op.mpg", &st)) {
         static const char *const m[] = {"MOVIES NOT PREPARED", "", "ux0:data/sh3/movie/ is missing or incomplete.", "Run sh3prep again and copy the whole sh3 folder."};
         boot_error(m, 4); sceKernelExitProcess(0);
     }
@@ -3344,7 +3344,7 @@ int main(int argc, char **argv) {
           if (sceIoGetstat(a,&st)>=0 && rename(a,b)!=0) rotated=0;
       } }
     freopen("ux0:data/sh3/diag/diag.log",rotated?"w":"a",stderr);
-    fprintf(stderr,"[session] sh3vita 1.0 build " __DATE__ " " __TIME__ "; previous sessions in diag-1.log (latest) .. diag-10.log%s\n",rotated?"":" (rotation failed: appended)");
+    fprintf(stderr,"[session] sh3vita 1.0.1 build " __DATE__ " " __TIME__ "; previous sessions in diag-1.log (latest) .. diag-10.log%s\n",rotated?"":" (rotation failed: appended)");
     boot_checks();
     extern int diag_tls_verify(void);
     if (diag_tls_verify()) return 5;

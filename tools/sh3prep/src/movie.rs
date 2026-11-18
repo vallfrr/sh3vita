@@ -17,7 +17,7 @@ use std::process::{Command, Stdio};
 use std::sync::OnceLock;
 
 const MULT: u32 = 0x5D58_8B65;
-const HEADER: usize = 0x8000;
+pub const HEADER: usize = 0x8000;
 const CHUNK: usize = 0x1000;
 
 /// Names of the movies the port knows (`data/movie/<name>.000`).
@@ -43,6 +43,13 @@ fn decrypt_chunk(buf: &mut [u8], base: u32) {
         let plain = u32::from_le_bytes([word[0], word[1], word[2], word[3]]) ^ state;
         word.copy_from_slice(&plain.to_le_bytes());
     }
+}
+
+/// Writes the first `HEADER` bytes of `src` (.000) to `dst`: what the game reads of a movie whose `.mp4` the port plays.
+pub fn write_header(src: &Path, dst: &Path) -> io::Result<()> {
+    let mut head = vec![0u8; HEADER];
+    File::open(src)?.read_exact(&mut head)?;
+    fs::write(dst, head)
 }
 
 /// Decrypts `src` (.000) into `dst` (.mpg). The output is `src.len() - 0x8000` bytes.

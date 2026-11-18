@@ -94,6 +94,7 @@ struct Movie {
     CPU *dec_cpu;
 #if defined(__vita__) && defined(SH3_MOVIE_HW_LAB)
     int hw_active, hw_handle;
+    double hw_duration;                           // .mp4 only (no .mpg opened): duration from movie_mp4_meta
     char hw_path[600];
     uint8_t *hw_planar;
     float *hw_audio;
@@ -102,6 +103,13 @@ struct Movie {
     int st_ndec, st_npush, st_nskip;
 };
 static Movie *g_mv;
+#if defined(__vita__) && defined(SH3_MOVIE_HW_LAB)
+#define MOVIE_MP4_ONLY(m) (!(m)->plm && (m)->hw_path[0] && (m)->hw_duration > 0)   /* .mp4 played without a .mpg */
+#define MOVIE_MP4_DURATION(m) (MOVIE_MP4_ONLY(m) ? (m)->hw_duration : 0)
+#else
+#define MOVIE_MP4_ONLY(m) 0
+#define MOVIE_MP4_DURATION(m) 0
+#endif
 #if defined(__vita__) && defined(SH3_MOVIE_HW_LAB)
 static void movie_hw_close(Movie *m);
 #endif
@@ -1167,7 +1175,7 @@ M(ctl, Run) {
         rt_log("[movie-lab] Run refused: playback deliberately disabled\n");
         STDRET(1, VFW_E_NOT_FOUND);
     }
-    if (!m->plm || !m->mem_in || !m->renderer) {
+    if ((!m->plm && !MOVIE_MP4_ONLY(m)) || !m->mem_in || !m->renderer) {
         rt_log("[movie-lab] Run refused: source or renderer is not connected\n");
         STDRET(1, VFW_E_NOT_FOUND);
     }
@@ -1211,7 +1219,7 @@ M(ctl, Run) {
 M(ctl, Pause) {
     HOSTFN; MV;
 #ifdef SH3_MOVIE_LAB
-    if (!m->plm || !m->mem_in || !m->renderer) STDRET(1, VFW_E_NOT_FOUND);
+    if ((!m->plm && !MOVIE_MP4_ONLY(m)) || !m->mem_in || !m->renderer) STDRET(1, VFW_E_NOT_FOUND);
 #endif
 #if defined(__vita__) && defined(SH3_MOVIE_HW_LAB)
     if(m->hw_active)movie_hw_ctl(sceAvPlayerPause(m->hw_handle),"pause");
@@ -1247,7 +1255,7 @@ M(ctl, Disp) { STDRET(2, E_NOTIMPL_); }
 static const gfn ctl_vt[] = {any_QI, any_AddRef, any_Release, ctl_Disp, ctl_Disp, ctl_Disp, ctl_Disp, ctl_Run,
     ctl_Pause, ctl_Stop, ctl_GetState, ctl_NI, ctl_NI, ctl_NI, ctl_NI, ctl_Pause};
 
-M(pos, Duration) { HOSTFN; MV; W64(ARG(2), rt_u64f(m->plm ? plm_get_duration(m->plm) : 0)); STDRET(2, HR_OK); }
+M(pos, Duration) { HOSTFN; MV; W64(ARG(2), rt_u64f(m->plm ? plm_get_duration(m->plm) : MOVIE_MP4_DURATION(m))); STDRET(2, HR_OK); }
 // ponytail: audio only follows a rewind to the start outside playback (the only expected case); a real seek would need plm_demux_seek.
 M(pos, PutCur) {
     HOSTFN; MV;
@@ -1443,9 +1451,37 @@ M(gr, Connect) {
     po->peer = in;
     STDRET(3, hr);
 }
+#if defined(__vita__) && defined(SH3_MOVIE_HW_LAB)
+/* The seven films of the supported sh3.exe data, as pl_mpeg reads them from the decrypted .mpg (all 512x384 with
+   sound). With only the .mp4 present the hardware decoder plays the film and these values stand in for the .mpg. */
+static int movie_mp4_meta(const char *host, Movie *m) {
+    static const struct { const char *name; double duration; } films[] = {
+        {"op", 192.09189999999998}, {"muxx", 13.133333333333333}, {"huxx", 17.951266666666669},
+        {"henshin", 24.691322222222219}, {"ed_n", 300.93396666666666}, {"ed_u", 342.07505555555554},
+        {"ed_b", 300.16653333333335}};
+    const char *base = strrchr(host, '/'); base = base ? base + 1 : host;
+    size_t n = strlen(base);
+    if (n < 5 || strcmp(base + n - 4, ".mp4")) return 0;
+    for (unsigned i = 0; i < sizeof films / sizeof films[0]; i++)
+        if (strlen(films[i].name) == n - 4 && !strncmp(base, films[i].name, n - 4)) {
+            m->w = 512; m->h = 384; m->hw_duration = films[i].duration;
+            return 1;
+        }
+    return 0;
+}
+#endif
 static int movie_open_source(Movie *m,const char *host) {
 #if defined(__vita__) && defined(SH3_MOVIE_HW_LAB)
-    m->hw_path[0]=0;
+    m->hw_path[0]=0; m->hw_duration=0;
+    if(getenv("SH3_DIAG_MOVIE_HW") && movie_mp4_meta(host,m)) {
+        size_t n=strlen(host);
+        if(n<sizeof m->hw_path) {
+            memcpy(m->hw_path,host,n+1);
+            g_movie_w=m->w; g_movie_h=m->h;
+            rt_log("[movie-hw] %s played directly (no .mpg), %dx%d, %.1f s\n",host,m->w,m->h,m->hw_duration);
+            return 1;
+        }
+    }
     if(getenv("SH3_DIAG_MOVIE_HW")) {
         /* Per movie: the hardware path only when its .mp4 sits next to the allowlisted .mpg; otherwise the
            software decoder plays it (no fatal stop in the playable build). */
@@ -1532,7 +1568,7 @@ M(gr, Render) {
     int connected=0;
     if(getenv("SH3_DIAG_MOVIE_PREP_SOURCE")) {
         MV;
-        if(!m->plm && m->path[0]) {
+        if(!m->plm && !MOVIE_MP4_ONLY(m) && m->path[0]) {
             int ok=movie_open_source(m,m->path);
             rt_log("[movie-lab] PC movie source prepared=%d (playback remains disabled)\n",ok);
         }
@@ -1559,7 +1595,7 @@ M(gr, Render) {
                     if(hr || fetched!=1 || !pin) break;
                     uint32_t direction_hr=gcall(c,pin,9,1,tmp+12);
                     rt_log("[movie-lab] renderer pin=%08x direction=%08x hr=%08x\n",pin,R32(tmp+12),direction_hr);
-                    if(getenv("SH3_DIAG_MOVIE_TEST_CONNECT") && !direction_hr && R32(tmp+12)==0 && m->plm && !m->mem_in) {
+                    if(getenv("SH3_DIAG_MOVIE_TEST_CONNECT") && !direction_hr && R32(tmp+12)==0 && (m->plm || MOVIE_MP4_ONLY(m)) && !m->mem_in) {
                         HObj *out=NULL;
                         for(unsigned j=0;j<10;j++) if(m->pins[j] && m->pins[j]->role==F_VCODEC && m->pins[j]->dir==1) { out=m->pins[j];break; }
                         if(out) {

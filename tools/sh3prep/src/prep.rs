@@ -8,7 +8,9 @@ use std::path::{Path, PathBuf};
 /// SHA-256 of `sh3.exe` (3,338,240 bytes): the recompiled code in the .vpk depends on it byte for byte.
 pub const EXE_SHA256: &str = "a51f956bd5be21fd704c4d19cf0674a175d002081da43b1d377be83226c36e5e";
 pub const EXE_NAME: &str = "sh3.exe";
-/// Folder of the game that is copied as is (the movies inside it are also copied: the game checks for them).
+/// Folder of the game that is copied as is, except the encrypted movies `data/movie/*.000`: when the `.mp4` is made,
+/// only their first `movie::HEADER` bytes are written (the game opens each `.000` and checks that block; the port plays
+/// the `.mp4`). Without an `.mp4` the full `.000` is copied.
 pub const DATA_DIR: &str = "data";
 
 #[derive(Debug)]
@@ -38,6 +40,7 @@ fn io_error(path: &Path, source: io::Error) -> Error { Error::Io { path: path.to
 pub struct Plan {
     pub files: Vec<(PathBuf, PathBuf)>, // (source, relative path inside sh3/)
     pub bytes: u64,
+    pub movies: PathBuf, // the game's data/movie/ (the .000 sources)
 }
 
 /// What the movie step did, for the final report.
@@ -82,10 +85,16 @@ pub fn check(game: &Path) -> Result<Plan, Error> {
             return Err(Error::MissingFolder(format!("{DATA_DIR}/movie/{name}.000")));
         }
     }
-    let mut plan = Plan { files: vec![(exe.clone(), PathBuf::from(EXE_NAME))], bytes: 0 };
+    let mut plan = Plan { files: vec![(exe.clone(), PathBuf::from(EXE_NAME))], bytes: 0, movies: data.join("movie") };
     walk(&data, Path::new(DATA_DIR), &mut plan.files).map_err(|e| io_error(&data, e))?;
+    plan.files.retain(|(_, rel)| !is_encrypted_movie(rel));
     plan.bytes = plan.files.iter().map(|(s, _)| fs::metadata(s).map(|m| m.len()).unwrap_or(0)).sum();
     Ok(plan)
+}
+
+/// `data/movie/<name>.000` of one of the seven films: written by the movie step, not by the plain copy.
+fn is_encrypted_movie(rel: &Path) -> bool {
+    movie::NAMES.iter().any(|name| rel == Path::new(DATA_DIR).join("movie").join(format!("{name}.000")))
 }
 
 fn walk(dir: &Path, rel: &Path, out: &mut Vec<(PathBuf, PathBuf)>) -> io::Result<()> {
@@ -133,34 +142,48 @@ pub fn prepare(
         }
         done += size;
     }
-    // Movies: decrypted .mpg (software decoder) and, when possible, .mp4 (hardware decoder, 30 fps).
+    // Movies: .mp4 for the Vita's hardware decoder (30 fps); the decrypted .mpg stays only when no .mp4 could be made.
     let movie_dir = dst_root.join("movie");
     fs::create_dir_all(&movie_dir).map_err(|e| io_error(&movie_dir, e))?;
     let mut report = MovieReport::default();
     let ffmpeg = convert_movies && movie::ffmpeg_available();
     report.ffmpeg_missing = convert_movies && !ffmpeg;
     for name in movie::NAMES {
-        let source = dst_root.join(DATA_DIR).join("movie").join(format!("{name}.000"));
+        let source = plan.movies.join(format!("{name}.000"));
+        let target = dst_root.join(DATA_DIR).join("movie").join(format!("{name}.000"));
+        if let Some(parent) = target.parent() { fs::create_dir_all(parent).map_err(|e| io_error(parent, e))?; }
         let mpg = movie_dir.join(format!("{name}.mpg"));
         let mp4 = movie_dir.join(format!("{name}.mp4"));
-        progress(done, Path::new(&format!("movie/{name}.mpg")));
-        if !mpg.is_file() || fs::metadata(&mpg).map(|m| m.len()).unwrap_or(0) + 0x8000 != fs::metadata(&source).map(|m| m.len()).unwrap_or(0) {
-            if let Err(e) = movie::demangle(&source, &mpg) {
-                let _ = fs::remove_file(&mpg);
-                report.failed.push(format!("{name}: {e}"));
-                continue;
+        let has_mp4 = fs::metadata(&mp4).map(|m| m.len() > 0).unwrap_or(false);
+        if !(ffmpeg && has_mp4) {
+            progress(done, Path::new(&format!("movie/{name}.mpg")));
+            if !mpg.is_file() || fs::metadata(&mpg).map(|m| m.len()).unwrap_or(0) + 0x8000 != fs::metadata(&source).map(|m| m.len()).unwrap_or(0) {
+                if let Err(e) = movie::demangle(&source, &mpg) {
+                    let _ = fs::remove_file(&mpg);
+                    report.failed.push(format!("{name}: {e}"));
+                    fs::copy(&source, &target).map_err(|e| io_error(&target, e))?;
+                    continue;
+                }
             }
         }
         report.decrypted += 1;
         if ffmpeg {
             progress(done, Path::new(&format!("movie/{name}.mp4")));
-            if !mp4.is_file() {
+            if !has_mp4 {
                 if let Err(e) = movie::to_mp4(&mpg, &mp4) {
+                    let _ = fs::remove_file(&mp4);
                     report.failed.push(format!("{name}.mp4: {e}"));
+                    // The .mpg stays for the software decoder, which also needs the full .000.
+                    fs::copy(&source, &target).map_err(|e| io_error(&target, e))?;
                     continue;
                 }
             }
+            // The Vita plays the .mp4; the decrypted .mpg is only the fallback when there is no .mp4.
+            let _ = fs::remove_file(&mpg);
+            movie::write_header(&source, &target).map_err(|e| io_error(&target, e))?;
             report.mp4 += 1;
+        } else {
+            fs::copy(&source, &target).map_err(|e| io_error(&target, e))?;
         }
     }
     let manifest = format!(
@@ -187,6 +210,13 @@ mod tests {
         assert_eq!(LANGUAGES.len(), crate::i18n::TEXT.len());
         assert_eq!(LANGUAGES.len(), crate::i18n::NAMES.len());
         assert_eq!(LANGUAGES[0], "English");
+    }
+
+    #[test]
+    fn encrypted_movies_are_not_plain_copied() {
+        assert!(is_encrypted_movie(&Path::new(DATA_DIR).join("movie").join("op.000")));
+        assert!(!is_encrypted_movie(&Path::new(DATA_DIR).join("movie").join("other.000")));
+        assert!(!is_encrypted_movie(&Path::new(DATA_DIR).join("bgam.arc")));
     }
 
     #[test]
