@@ -125,10 +125,10 @@ The button layout is fixed (no remapping). You can review it at any time in-game
 
 | Input | Action |
 |:--|:--|
-| **✕ Cross** | Action / examine |
-| **○ Circle** | Flashlight (in game) / back (in menus) |
-| **□ Square** | Run / guard |
-| **△ Triangle** | Inventory |
+| **Cross** | Action / examine |
+| **Circle** | Flashlight (in game) / back (in menus) |
+| **Square** | Run / guard |
+| **Triangle** | Inventory |
 | **Select** | Map |
 | **Start** | Pause |
 
@@ -140,7 +140,7 @@ In the Options screen, **L** and **R** switch between the pages.
 
 ## Status
 
-**Version 1.0, the first official release.** The game is playable from start to finish on a real PS Vita.
+**Version 1.0** The game is playable from start to finish on a real PS Vita, all major and minor bugs encountered by me or the testers are now fixed.
 
 | Area | State |
 |:--|:--|
@@ -155,7 +155,7 @@ Measured rooms and test limits: [docs/KNOWN-ISSUES.md](docs/KNOWN-ISSUES.md).
 ### Known limitations
 
 - **Heavy rooms** (parts of the hospital basement) can drop below 30 fps.
-- **Memory is tight.** In very long sessions (an hour or more) with many area changes, the game can run out of memory. Saving regularly is recommended.
+- **Memory is tight.** In very long sessions (3 hours or more) with many area changes, the game can run out of memory. Saving regularly is recommended.
 - **"Unlimited" frame rate** makes Heather's movement uneven. Use the default **60** (or 30).
 - The **flashlight glow** and **lens flares** are not rendered. The scene stays readable and playable.
 
