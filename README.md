@@ -98,6 +98,8 @@ Saves and settings go in `ux0:data/sh3/savedata/`. The current log is `ux0:data/
 
 Close the game and install the new VPK over the existing application with VitaShell. Keep `ux0:data/sh3/`, including your saves and settings. You do not need to prepare the game files again unless a release explicitly says so. If it does, back up your `ux0:data/sh3/savedata/` folder first.
 
+The application ID is now `SILHIL003`. If you installed an earlier test version (`SILH00003`), the new VPK installs next to it: delete the old Silent Hill 3 bubble afterwards. Your saves and settings in `ux0:data/sh3/` are not affected.
+
 ## Controls
 
 The button layout is fixed (no remapping). You can review it at any time in-game with **Options → View controls**. Movement uses Silent Hill 3's **2D** control type: Heather walks in the direction you push the stick.
