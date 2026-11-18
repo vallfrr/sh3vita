@@ -53,6 +53,12 @@ int main(int argc,char **argv) {
     { uint32_t out[4]={40000,30000,0x200000,0x8000};memcpy(g_mem+4096,out,16);diag_world_note_xyz(4096);
       double n2=480+(40000/16.0-2048)*960/512, l2=480+(n2-480)*(4.0/3.0)/(960.0/544.0);
       assert(fabs(convert(40000,30000,0x20000,0x5f6d27)-(enabled?n2:l2))<1e-9);
+      /* Issue3: the native decal producer adds0xa0 to Z after projection.
+         Never match an unregistered biased depth by an XY-only heuristic. */
+      assert(fabs(convert(40000,30000,0x2000a,0x5f6d27)-l2)<1e-9);
+      out[2]+=0xa0;memcpy(g_mem+4096,out,16);diag_world_note_xyz(4096);
+      assert(fabs(convert(40000,30000,0x2000a,0x5f6d27)-(enabled?n2:l2))<1e-9);
+      assert(fabs(convert(40000,30000,0x2000b,0x5f6d27)-l2)<1e-9);
       out[3]=0x1234;out[0]=41000;memcpy(g_mem+4096,out,16);diag_world_note_xyz(4096);   /* not a projection block: ignored */
       n2=480+(41000/16.0-2048)*960/512; l2=480+(n2-480)*(4.0/3.0)/(960.0/544.0);
       assert(fabs(convert(41000,30000,0x20000,0x5f6d27)-l2)<1e-9);

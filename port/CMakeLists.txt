@@ -245,7 +245,7 @@ endif()
 option(SH3_BLOOD_WORLD "Preserve native world projection for tagged blood vertices" ON)
 if(SH3_BLOOD_WORLD)
   set_property(SOURCE diag_widescreen_hook.c APPEND PROPERTY COMPILE_DEFINITIONS SH3_BLOOD_WORLD_DEFAULT=1)
-  foreach(BLOOD_INDEX 062 122)
+  foreach(BLOOD_INDEX 062 122 125)
     set(BLOOD_UNIT "${CMAKE_CURRENT_BINARY_DIR}/blood-packet/x86_f${BLOOD_INDEX}.c")
     execute_process(COMMAND "${Python3_EXECUTABLE}" "${SH3_ROOT}/tools/blood_packet_unit.py"
       "${SH3_GEN_DIR}/x86_f${BLOOD_INDEX}.c" "${BLOOD_UNIT}" RESULT_VARIABLE BLOOD_RESULT)

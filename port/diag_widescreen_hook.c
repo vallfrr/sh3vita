@@ -56,6 +56,7 @@ void diag_blood_note_packet(uint32_t p) {
 /* Every world-to-screen projection of the game's effect system (F_0059ef90: blood, footprints and the other floor/air effects of
    F_004f0xxx and F_005b5xxx..F_005caxxx) writes its integer GS X, Y, Z to out[0..2]; record them all, not only the blood producers
    (Valentin, 2026-11-17: footprints slid like the blood and the lamp halos did). */
+static struct { uint32_t xy,z,f; } note_ring[8]; static unsigned note_n;   /* diagnostic: last recorded world vertices */
 void diag_world_note_xyz(uint32_t p) {
     if(!blood_enabled() && !blood_audit())return;
     if(g_mem_size<16 || p>g_mem_size-16)return;
@@ -64,6 +65,7 @@ void diag_world_note_xyz(uint32_t p) {
         if((ok+bad)%2000u==0 && ok+bad<=40000u)fprintf(stderr,"[world-note] frame=%u accepted=%u rejected=%u\n",g_frame,ok,bad); }
     if(xyz[3]&~0x8000u)return;   /* not the X, Y, Z, flag block the function writes: record nothing */
     world_add((xyz[0]&65535u)|(xyz[1]<<16),xyz[2]>>4);
+    note_ring[note_n&7].xy=(xyz[0]&65535u)|(xyz[1]<<16); note_ring[note_n&7].z=xyz[2]>>4; note_ring[note_n&7].f=g_frame; note_n++;
 }
 static int blood_vertex(uint32_t address) {
     if(g_mem_size<8 || address>g_mem_size-8)return 0;
@@ -110,6 +112,32 @@ void diag_wide_render_reset(CPU *c) {
    game's 2D picture call F_004dc770 (cursor_ui_unit.py tags its entry). While one is on screen the whole screen keeps the game's
    16:9 layout for that frame and the next two, text and markers drawn around the picture included, like the map: squeezed, the
    picture sat in a 4:3 box with bars (Valentin 2026-11-17: every interactive screen must fill the screen; inventory excluded). */
+/* Diagnostic only (instrumented unit copies, SH3_WIN_UNIT_PATCH): last frame each candidate effect producer ran. */
+static struct { unsigned fn,frame,previous; } prod[16]; static unsigned nprod;
+void diag_prod_mark(unsigned fn) {
+    static int trace=-1;if(trace<0)trace=getenv("SH3_DIAG_SQUEEZE_TRACE")!=NULL;
+    if(!trace)return;
+    if (fn==0x5c7a00u) { static unsigned last=~0u, frames; if (last!=g_frame) { last=g_frame; if ((++frames%30u)==1u && frames<=30000u) fprintf(stderr,"[footprint-frames] %u (frame %u)\n",frames,g_frame); } }
+    unsigned i=0; for(;i<nprod;i++) if(prod[i].fn==fn) break;
+    if(i==nprod){if(nprod==16)return;prod[i].fn=fn;prod[i].frame=prod[i].previous=~0u;nprod++;}
+    if(prod[i].frame!=g_frame){prod[i].previous=prod[i].frame;prod[i].frame=g_frame;} }
+/* Diagnostic (SH3_DIAG_SQUEEZE_TRACE): footprint quads (F_005c7a00) emitted per presented frame. */
+void diag_fp_count(uint32_t p) {
+    static int trace=-1;if(trace<0)trace=getenv("SH3_DIAG_SQUEEZE_TRACE")!=NULL;
+    if(!trace)return;
+    static unsigned cur=~0u,n,flagged,lines;
+    if(cur!=g_frame){ if(cur!=~0u && n && lines<4000){lines++;fprintf(stderr,"[fp-draw] frame=%u quads=%u flagged=%u\n",cur,n,flagged);} cur=g_frame;n=0;flagged=0; }
+    n++;
+    if(g_mem_size>=16 && p<=g_mem_size-16){ uint32_t f; memcpy(&f,g_mem+p+12,4); if(f)flagged++; }
+}
+/* Footprint depth bias added by F_005c7a00 after projection. The game uses 0xa0, which only just beats the floor in depth: on PC the
+   footprints disappear below about 0x8c, and on the Vita the slightly different depth rounding made them blink with the camera
+   position (issue #3, 2026-11-18). 0x400 keeps a wide margin and nothing else near the floor shows through. SH3_FOOT_BIAS overrides it. */
+unsigned diag_fp_bias(void) {
+    static int ready, v;
+    if(!ready){ const char *e=getenv("SH3_FOOT_BIAS"); v=e?(int)strtol(e,NULL,0):0x400; if(e)fprintf(stderr,"[foot-bias] %d\n",v); ready=1; }
+    return (unsigned)v;
+}
 static unsigned viewer_frame=~0u;
 void diag_picture_note(uint32_t esp) {
     uint32_t caller;
@@ -147,6 +175,32 @@ void diag_wide_interface_x(CPU *c) {
     { extern int diag_cursor_screen_active(void); uint32_t ui=0; if (g_mem_size>0xbcc664u) memcpy(&ui,g_mem+0xbcc660u,4);
       if (ui==9 || ui==11 || diag_cursor_screen_active()) return;
       if (viewer_frame!=~0u && g_frame-viewer_frame<=2u) return; }
+    {   /* Diagnostic (SH3_DIAG_SQUEEZE_TRACE): in gameplay, who sends GS-decoder vertices that get the 4:3 squeeze without
+           being registered as world-projected. Logs each new stack signature (code addresses near the top of the stack). */
+        static int trace=-1; if (trace<0) trace=getenv("SH3_DIAG_SQUEEZE_TRACE")!=NULL;
+        uint32_t ui=0; if (trace && g_mem_size>0xbcc664u) memcpy(&ui,g_mem+0xbcc660u,4);
+        if (trace && ui==5) {
+            static unsigned cf=~0u, cn, lines;   /* per frame: how many squeezed unregistered vertices, and which producers ran */
+            if (cf!=g_frame) {
+                if (cn && lines<3000) { lines++; fprintf(stderr,"[squeeze-count] frame=%u vertices=%u producers:",cf,cn);
+                    for (unsigned j=0;j<nprod;j++) if (cf==prod[j].frame || cf==prod[j].previous) fprintf(stderr," %08x",prod[j].fn); fprintf(stderr,"\n"); }
+                cf=g_frame; cn=0;
+            }
+            cn++;
+            uint32_t sig[6]={0}; unsigned k=0;
+            sig[k++]=ret;
+            for (unsigned i=1;i<96 && k<6 && c->esp+4*i<=g_mem_size-4;i++) { uint32_t w; memcpy(&w,g_mem+c->esp+4*i,4); if (w>=0x401000u && w<0x680000u) sig[k++]=w; }
+            static uint32_t seen[96][6]; static unsigned ns; unsigned i=0;
+            for (;i<ns;i++) if (!memcmp(seen[i],sig,sizeof sig)) break;
+            if (i==ns && ns<96) { memcpy(seen[ns++],sig,sizeof sig);
+                fprintf(stderr,"[squeeze-trace] frame=%u x=%.1f world=%d chain=%08x %08x %08x %08x %08x %08x\n",g_frame,c->st[c->ftop&7u],
+                        (blood_enabled()||blood_audit()) && blood_vertex(c->esi),sig[0],sig[1],sig[2],sig[3],sig[4],sig[5]);
+                for (unsigned j=0;j<nprod;j++) if (g_frame-prod[j].frame<=1u) fprintf(stderr,"[squeeze-trace]   producer this frame: F_%08x\n",prod[j].fn);
+                { uint32_t pk[2]={0,0}; if (c->esi<=g_mem_size-8) memcpy(pk,g_mem+c->esi,8); fprintf(stderr,"[squeeze-trace]   vertex xy=%08x z=%08x; last notes:",pk[0],pk[1]);
+                  for (unsigned j=0;j<8;j++) fprintf(stderr," %08x/%08x@%u",note_ring[j].xy,note_ring[j].z,note_ring[j].f);
+                  fprintf(stderr,"\n"); } }
+        }
+    }
     if (wide_flag(1) && wide_flag(2)) {
         double x=c->st[c->ftop&7u];
         if (x<=8.0 || x>=952.0) {   /* test build log: a squeezed element reaching a screen edge is a full-screen 2D layer (bars at the sides) */

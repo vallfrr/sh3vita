@@ -144,6 +144,78 @@ static void bench_tick(CPU *c) {
         float raw=maximum*(value/100.0f);memcpy(g_mem+0x898660u,&raw,4);
         fprintf(stderr,"[bench] INJECTED HP fixture address=00898660 raw=%g->%g max=%g percent=%g->%g; not natural damage\n",current,raw,maximum,expected,value);done=1;
     }
+    else if (!strcmp(s->cmd,"enemies") || !strcmp(s->cmd,"killenemies") ||
+             !strcmp(s->cmd,"waitdead") || !strcmp(s->cmd,"approachcorpse")) {
+        /* PC enemyWork: 32 entries, stride0x160, active+0x158,
+           SubCharacter*+4 (F_004a3030/F_004a30d0). Common HP+0x180. */
+        unsigned ordinal=0,found=0,killed=0,corpses=0;float player[3];memcpy(player,g_mem+0x8984e0u,12);memcpy(&ordinal,g_mem+0x897e48u,4);
+        if(bench_state_top()!=5 || g_mem[0x70e66d9u]!=2 || ordinal!=11) {
+            fprintf(stderr,"[bench] enemy fixture requires gameplay2:11\n");fflush(stderr);_exit(89);
+        }
+        for(unsigned i=0;i<32;i++) {
+            uint32_t work=0x71294c0u+0x160u*i,p=0,ai=0;uint16_t kind=0,mode=0;float hp=0,maximum=0,pos[3];
+            if(!g_mem[work+0x158])continue;
+            memcpy(&p,g_mem+work+4,4);memcpy(&ai,g_mem+work,4);
+            if(p==0x8984e0u || p>g_mem_size-0x1b0u)continue;
+            memcpy(&kind,g_mem+p+0x80,2);memcpy(&hp,g_mem+p+0x180,4);memcpy(&maximum,g_mem+p+0x184,4);
+            memcpy(&mode,g_mem+work+0x152,2);memcpy(pos,g_mem+p,12);
+            if(kind<0x200 || kind>=0x300 || !isfinite(hp) || !isfinite(maximum) || maximum<=0 || maximum>1000000 || hp>maximum)continue;
+            float dx=pos[0]-player[0],dz=pos[2]-player[2];
+            if(!isfinite(dx) || !isfinite(dz) || dx*dx+dz*dz>2000.0f*2000.0f)continue;
+            found++;
+            unsigned corpse=(kind==0x201 && hp<=0 && (mode==31 || mode==32));
+            corpses+=corpse;
+            if(!strcmp(s->cmd,"approachcorpse") && corpse && corpses==1) {
+                /* Deterministic placement beside the real corpse. Character
+                   position and previous position are common native fields. */
+                float place[3]={pos[0]-100.0f,pos[1],pos[2]},yaw=1.57079632679f;
+                memcpy(g_mem+0x8984e0u,place,12);memcpy(g_mem+0x8984e0u+0xd0u,place,12);
+                memcpy(g_mem+0x8984e0u+0x14u,&yaw,4);
+                fprintf(stderr,"[bench] INJECTED player beside corpse actor=%08x pos=%g,%g,%g yaw=%g\n",p,place[0],place[1],place[2],yaw);
+            }
+            unsigned injected=0;
+            if(!strcmp(s->cmd,"killenemies") && hp>0 && kind==0x201 && ai==0x557eb0u) {
+                float zero=0;memcpy(g_mem+p+0x180,&zero,4);
+                /* Numb Body native knockdown21 completes into dead state32
+                   when HP<=0 (F_00557770, 00557883..005578a6). HP alone
+                   does not interrupt its current AI state. */
+                CPU saved=*c;rt_guest_call(c,0x5d2550u,2,work,21u);
+                rt_guest_call(c,0x5d2530u,2,work,0u);*c=saved;killed++;injected=1;
+            }
+            if(strcmp(s->cmd,"waitdead") || bench_step_frames==1 || corpse)fprintf(stderr,"[bench-enemy] slot=%u work=%08x actor=%08x kind=%x ai=%08x mode=%u hp=%g/%g pos=%g,%g,%g injected_dead=%u\n",
+                    i,work,p,kind,ai,mode,hp,maximum,pos[0],pos[1],pos[2],injected);
+        }
+        if(strcmp(s->cmd,"waitdead"))fprintf(stderr,"[bench-enemy] found=%u killed=%u\n",found,killed);
+        if(!strcmp(s->cmd,"killenemies") && !found){fprintf(stderr,"[bench] no enemy to kill\n");fflush(stderr);_exit(89);}
+        if(!strcmp(s->cmd,"approachcorpse") && !corpses){fprintf(stderr,"[bench] no native corpse to approach\n");fflush(stderr);_exit(89);}
+        if(!strcmp(s->cmd,"waitdead")) {
+            if(corpses)bench_stable++;else bench_stable=0;
+            done=bench_stable>=30;
+            unsigned limit=(unsigned)atoi(s->arg);if(!limit)limit=60000;
+            if(!done && el>limit){fprintf(stderr,"[bench] native death TIMEOUT\n");fflush(stderr);_exit(89);}
+        } else done=1;
+    }
+    else if (!strcmp(s->cmd,"fixturefoot") || !strcmp(s->cmd,"fixturedecal")) {
+        /* Explicit diagnostic fixture: create native type11 at a fixed world
+           position, using the same descriptor as F_005c7fd0. No save writes. */
+        float dx=0,dz=0,pos[4];uint32_t room=0;unsigned type=11;
+        memcpy(&room,g_mem+0x897e48u,4);memcpy(pos,g_mem+0x8984e0u,12);
+        if(sscanf(s->arg,"%f %f %u",&dx,&dz,&type)<2 || (type!=7 && type!=9 && type!=11) || !isfinite(dx) || !isfinite(dz) ||
+           fabsf(dx)>1000 || fabsf(dz)>1000 || bench_state_top()!=5 ||
+           g_mem[0x70e66d9u]!=2 || room!=11 || c->esp<512 || c->esp>g_mem_size) {
+            fprintf(stderr,"[bench] fixturefoot rejected\n");fflush(stderr);_exit(89);
+        }
+        pos[0]+=dx;pos[2]+=dz;pos[3]=1;
+        uint32_t descriptor=c->esp-128,words[16]={0};uint8_t previous[64];
+        words[1]=type;memcpy(words+4,pos,16);words[13]=0x3f800000u;
+        /* +0x3c=0 keeps the diagnostic mark from fading during the orbit. */
+        memcpy(previous,g_mem+descriptor,64);memcpy(g_mem+descriptor,words,64);
+        CPU saved=*c;c->esp=descriptor-32;
+        uint32_t result=rt_guest_call(c,0x4e9960u,1,descriptor);
+        *c=saved;memcpy(g_mem+descriptor,previous,64);
+        fprintf(stderr,"[bench] INJECTED native decal type=%u lifetime_flag=0 pos=%g,%g,%g result=%x\n",type,pos[0],pos[1],pos[2],result);
+        done=1;
+    }
     else if (!strcmp(s->cmd,"peek")) {
         unsigned address=0,count=0;
         if(sscanf(s->arg,"%x %u",&address,&count)!=2 || !count || count>64 || (uint64_t)address+count>g_mem_size) {

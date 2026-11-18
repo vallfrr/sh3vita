@@ -47,15 +47,20 @@
 #include <psp2/kernel/threadmgr.h>
 #include <psp2/kernel/cpu.h>
 #include <psp2/rtc.h>
-#define DIAG_SAVE_SOURCE "ux0:data/sh3/savedata"
-#define DIAG_SAVE_SCRATCH "ux0:data/sh3/savedata"
-#define DIAG_ROOT_FILE "ux0:data/sh3/data.sys"
-#define DIAG_ROOT_DIR "ux0:data/sh3"
+static int diag_save_fixture;
+#define DIAG_SAVE_SOURCE (diag_save_fixture ? "ux0:data/sh3/diag/save-fixture" : "ux0:data/sh3/savedata")
+#define DIAG_SAVE_SCRATCH DIAG_SAVE_SOURCE
+#define DIAG_SAVE_READ_FILE(name) (diag_save_fixture ? "ux0:data/sh3/diag/save-fixture/" name : "ux0:data/sh3/savedata/" name)
+#define DIAG_SAVE_WRITE_FILE(name) DIAG_SAVE_READ_FILE(name)
+#define DIAG_ROOT_FILE (diag_save_fixture ? "ux0:data/sh3/diag/save-fixture/root-data.sys" : "ux0:data/sh3/data.sys")
+#define DIAG_ROOT_DIR (diag_save_fixture ? "ux0:data/sh3/diag/save-fixture" : "ux0:data/sh3")
 #else
 #define DIAG_SAVE_SOURCE "game/savedata"
 #define DIAG_SAVE_SCRATCH "build/pc-diag/savedata"
 #define DIAG_ROOT_FILE "game/data.sys"
 #define DIAG_ROOT_DIR "game"
+#define DIAG_SAVE_READ_FILE(name) DIAG_SAVE_SOURCE "/" name
+#define DIAG_SAVE_WRITE_FILE(name) DIAG_SAVE_SCRATCH "/" name
 #endif
 #ifdef __vita__
 int _newlib_heap_size_user=24*1024*1024;
@@ -1549,7 +1554,7 @@ void imp_KERNEL32_FindFirstFileA(CPU *c) {
     }
     if (!strcasecmp(path,"C:\\SILENT HILL 3\\savedata\\data.sys")) {
         struct stat st;
-        if (!a[1] || a[1]>DIAG_MEM_SIZE-320 || stat(DIAG_SAVE_SCRATCH "/data.sys",&st) || !S_ISREG(st.st_mode)) {
+        if (!a[1] || a[1]>DIAG_MEM_SIZE-320 || stat(DIAG_SAVE_WRITE_FILE("data.sys"),&st) || !S_ISREG(st.st_mode)) {
             fprintf(stderr,"[diag] scratch data.sys unavailable for enumeration\n"); exit(30);
         }
         uint32_t attr=0x80, hi=(uint32_t)((uint64_t)st.st_size>>32), lo=(uint32_t)st.st_size;
@@ -1718,8 +1723,8 @@ void imp_KERNEL32_CreateFileA(CPU *c) {
          !strcasecmp((char *)g_mem+a[0],"C:\\SILENT HILL 3\\savedata\\key.ini") ||
          !strcasecmp((char *)g_mem+a[0],"C:\\SILENT HILL 3\\savedata\\data.sys")) && a[1]==0x80000000u && a[4]==3 && c->fs_base<=DIAG_MEM_SIZE-0x38) {
         const char *guest=(char *)g_mem+a[0];
-        const char *file=!strcasecmp(guest,"C:\\SILENT HILL 3\\savedata\\key.ini") ? DIAG_SAVE_SOURCE "/key.ini" :
-            !strcasecmp(guest,"C:\\SILENT HILL 3\\savedata\\data.sys") ? DIAG_SAVE_SCRATCH "/data.sys" : DIAG_SAVE_SOURCE "/disp.ini";
+        const char *file=!strcasecmp(guest,"C:\\SILENT HILL 3\\savedata\\key.ini") ? DIAG_SAVE_READ_FILE("key.ini") :
+            !strcasecmp(guest,"C:\\SILENT HILL 3\\savedata\\data.sys") ? DIAG_SAVE_WRITE_FILE("data.sys") : DIAG_SAVE_READ_FILE("disp.ini");
         struct stat st;
         if (!stat(file,&st)) {
 #ifndef __vita__
@@ -1745,7 +1750,7 @@ void imp_KERNEL32_CreateFileA(CPU *c) {
         pthread_mutex_lock(&diag_object_lock);
         unsigned i=0; while (i<64 && diag_files[i]) i++;
         if (i==64) { fprintf(stderr,"[diag] file table full\n"); exit(36); }
-        const char *scratch=!strcasecmp((char *)g_mem+a[0],"C:\\SILENT HILL 3\\savedata\\data.sys") ? DIAG_SAVE_SCRATCH "/data.sys" : DIAG_SAVE_SCRATCH "/disp.ini";
+        const char *scratch=!strcasecmp((char *)g_mem+a[0],"C:\\SILENT HILL 3\\savedata\\data.sys") ? DIAG_SAVE_WRITE_FILE("data.sys") : DIAG_SAVE_WRITE_FILE("disp.ini");
         /* disp.ini (Brightness gamma_r/g/b) goes through a .tmp renamed on close only if something was written: the
            game truncates it at every boot ("wt" open/close in F_005f09f0) and only writes it on a clean exit or an
            Brightness screen commit (console_reference_unit.py, F_005ed0f0); a killed app must keep the last written one. */
@@ -3445,10 +3450,23 @@ int main(int argc, char **argv) {
         if (unlink("ux0:data/sh3/diag/profileio")) return 5;
         diag_io_profile=1; fprintf(stderr,"[diag] game data read timing enabled\n");
     }
+    FILE *bench_save=fopen("ux0:data/sh3/diag/benchsave","rb");
+    if(bench_save) {
+        int mode=fgetc(bench_save),tail=fgetc(bench_save);
+        int valid=mode=='1' && (tail==EOF || (tail=='\n' && fgetc(bench_save)==EOF));
+        fclose(bench_save);struct stat fixture;
+        if(!valid || stat("ux0:data/sh3/diag/save-fixture/data.001",&fixture) ||
+           !S_ISREG(fixture.st_mode) || fixture.st_size!=9952) {
+            fprintf(stderr,"[bench-save] invalid isolated Save1 fixture\n");return 5;
+        }
+        if(unlink("ux0:data/sh3/diag/benchsave"))return 5;
+        diag_save_fixture=1;
+        fprintf(stderr,"[bench-save] isolated save-fixture active; real savedata excluded\n");
+    }
     /* Earlier diagnostics can leave an empty, uninitialized settings artifact. */
     struct stat old_settings;
-    if (!stat(DIAG_SAVE_SCRATCH "/disp.ini",&old_settings) && S_ISREG(old_settings.st_mode) && old_settings.st_size==0) {
-        if (unlink(DIAG_SAVE_SCRATCH "/disp.ini")) { fprintf(stderr,"[diag] cannot discard empty diagnostic settings\n"); return 5; }
+    if (!stat(DIAG_SAVE_WRITE_FILE("disp.ini"),&old_settings) && S_ISREG(old_settings.st_mode) && old_settings.st_size==0) {
+        if (unlink(DIAG_SAVE_WRITE_FILE("disp.ini"))) { fprintf(stderr,"[diag] cannot discard empty diagnostic settings\n"); return 5; }
         fprintf(stderr,"[diag] discarded empty diagnostic settings artifact\n");
     }
     setenv("SH3_DIAG_THREADS","1",1);
@@ -3753,6 +3771,13 @@ int main(int argc, char **argv) {
         setenv("SH3_DIAG_TINYLOG","1",1);
     }
     /* The Vita display is widescreen; retain a one-shot 4:3 comparison mode. */
+    FILE *squeeze_trace=fopen("ux0:data/sh3/diag/squeezetrace","rb");
+    if(squeeze_trace) {
+        fclose(squeeze_trace);
+        if(unlink("ux0:data/sh3/diag/squeezetrace"))return 5;
+        setenv("SH3_DIAG_SQUEEZE_TRACE","1",1);
+    }
+    { FILE *fb=fopen("ux0:data/sh3/diag/footbias","rb"); if(fb){ char v[24]={0}; if(!fgets(v,sizeof v,fb))v[0]=0; fclose(fb); unlink("ux0:data/sh3/diag/footbias"); if(v[0])setenv("SH3_FOOT_BIAS",v,1); } }
     FILE *blood_audit=fopen("ux0:data/sh3/diag/bloodaudit","rb");
     if(blood_audit) {
         fclose(blood_audit);
