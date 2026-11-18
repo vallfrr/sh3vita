@@ -2862,7 +2862,7 @@ extern void F_005f15e0_translated(CPU *c);
        actually elapsed, 1..3) in gameplay; menus/loadings keep the engine's adaptive target, also at most 60.
    Marker fpsmode (0/1/2) / env SH3_FPS_MODE overrides the saved value for benches. */
 static unsigned diag_fps_mode(void) {
-    return g_fps_mode_override>=0?(unsigned)g_fps_mode_override:g_mem[0x70e66cdu];
+    return g_fps_mode_override>=0?(unsigned)g_fps_mode_override:(g_mem[0x70e66cdu]&0x7fu);
 }
 static void diag_pace_force60(CPU *c) {
     /* Original force-60 path also publishes the ACTUAL consumed ticks to
@@ -2973,7 +2973,7 @@ void __wrap_F_0041b2c0(CPU *c) {
         memcpy(&requested,g_mem+0x72c7e8u,4);
         if (g_pace60_park && diag_pace60_scene(c) && requested>=1 && requested<=60 && freq==1000000000ull) {
             lab_active=1;
-            if (requested>1 && (!g_pace60_even || (g_fps_mode_override>=0?(unsigned)g_fps_mode_override:g_mem[0x70e66cdu])==2u)) { uint32_t one=1; memcpy(g_mem+0x72c7e8u,&one,4); pace60=1; }
+            if (requested>1 && (!g_pace60_even || (g_fps_mode_override>=0?(unsigned)g_fps_mode_override:(g_mem[0x70e66cdu]&0x7fu))==2u)) { uint32_t one=1; memcpy(g_mem+0x72c7e8u,&one,4); pace60=1; }
         }
     }
     { static int previous=-1;

@@ -3,6 +3,22 @@
 import argparse, hashlib, re
 from pathlib import Path
 SIGNATURES = {
+ '005e3400': '8d92be9eba0516f78c18cae56594996fe8273c9ad402b29e516084d237d7344c',
+ '005e3480': '32e3339eaa28d2cffe31e973bba74c0ea92376f4aedab77236868e13a1795bac',
+ '005e3500': '899f8c41962155c8a5e84383c12c6c7e76a32ba207fa6e1e7572934196e2212f',
+ '005e4fc0': 'cdd9bc41f23e23c3319359d52a02c3306666765b51555eeb2cc0313e87f82cd7',
+ '005e5130': '71c69907c78b9b23e55b9b24fe466d5debd6019fe2177e4fc42d94bd86f3ef26',
+ '005e52a0': 'c4dcd87f7e33a3d45b97c327d46a078f967b11e49683319ca1828fbd780e5b1b',
+ '005e53c0': '7d8d6d8640e4e7e3b440d25ee1d85c34a7ed86f85357484086b45d41500f7460',
+ '005e54e0': '04008d3e62ef30a2a79e30a0cb24b91f250e355dd091775090b4626c4109f87b',
+ '005e5600': 'd8d0259c7da0191248265d532727aa201b118670c2ecd66874351dc9e17ab4b1',
+ '005e5820': '390a083053e0893b9a50c5c9eb6a384f78f3f9b6d9154d049cf087e047049410',
+ '005e5990': '6ad44f8a65d8b49d2dfa948711eb66ade96cfd68d5b92643e219dacaa9ab9677',
+ '005e5ac0': '90b578763f73ea022e8946515822b8473e193083c4616794bb5563d441a1f080',
+ '005e3660': '8064d8f72e5a38f7e2c5d46b0072a6f21d0006d83fd4e46d589c52c64118f257',
+ '005e4640': 'e768e9448837439d72a3c0fbc64fc081a88b767171f8eb53cf5c04d7d68fde3b',
+ '005e4f20': '8ddb7741778f91a843d6c0f612586dcaac00ba6a8a1255a5301201a5d3e43b7b',
+
  '005d80c0': 'b4fff45d1b79de812514b4e3dad2de8c47b9f13ba9523f7b7eee884eb0981a97',
  '005e2e60': '247339549a3ac8e8f1121b8aaf11b4a802463e763a3a67cb4af6be8bc3b32deb',
  '005e3130': '4833afd411f739fc54e9def1437ac84388238b35dd7187a4b79d054017a9b6aa',
@@ -25,16 +41,18 @@ SIGNATURES = {
  '0058edb0': '949d68c34a7a645ab22b39c9ffc5fedb7f98f9a1d5a0b383f37f935f4e7397b7',
  '005e35e0': '6985c5a61fce46804fa7f1c16db7dcd066082640af964e61f45c66575dd75d39',
 }
-PAGE_BODY = """  /* Two pages only (Main <-> Extra): the PC Configuration page is retired, its Gamma row sits on page 1. */
+
+PAGE_BODY = """  /* Two pages only (Main <-> Extra): the PC Configuration page is retired, movement sits before Extra Exit. */
   uint8_t *const mb = g_mem; uint32_t esp=c->esp, cur=R8(0xbcc178u), to=cur, n;
-  if(cur>=1u && cur<=10u){ to=cur+10u; if(to>0x15u)to=0x15u; for(n=0;n<11u && !R8(0xbcc182u+to);n++){to++;if(to>0x15u)to=0xbu;} }
-  else if(cur>=0xbu && cur<=0x15u){ to=cur-10u; if(to>10u)to=10u; if(to<1u)to=1u; for(n=0;n<10u && !R8(0xbcc182u+to);n++){to++;if(to>10u)to=1u;} }
+  if(cur>=1u && cur<=10u){ to=cur+10u; if(to>0x16u)to=0x16u; for(n=0;n<12u && !R8(0xbcc182u+to);n++){to++;if(to>0x16u)to=0xbu;} }
+  else if(cur>=0xbu && cur<=0x16u){ to=cur-10u; if(to>10u)to=10u; if(to<1u)to=1u; for(n=0;n<10u && !R8(0xbcc182u+to);n++){to++;if(to>10u)to=1u;} }
   else to=1u;
   W8(0xbcc179u,to&0xffu);
   if(cur!=to){ uint32_t e=esp; e-=4;W32(e,0u); e-=4;W32(e,0x3f800000u); e-=4;W32(e,1u); e-=4;W32(e,0x5e3600u); c->esp=e; F_0046cd50(c); }
   c->esp=esp+4u;
 """
 def replace(source):
+    original_source=source
     found = 0
     for name, sha in SIGNATURES.items():
         m = re.search(r'void F_'+name+r'\(CPU \*c\) \{.*?\n\}',source,re.S)
@@ -58,7 +76,7 @@ def replace(source):
             body=body.replace(needle, '''  /* The native Extra page already counts visible rows. Apply that same
      layout to Main and Image, without changing font size or message data. */
   if (edi>=11u && edi<=28u) {
-    uint32_t first=edi<=10u?1u:(edi<=21u?11u:22u), count=0;
+    uint32_t first=edi<=10u?1u:(edi<=22u?11u:23u), count=0;
     for(uint32_t row=first;row<edi;row++)count+=R8(0xbcc182u+row)!=0;
     esi=0x60u+25u*count; goto L_005e3262;
   }
@@ -78,11 +96,11 @@ def replace(source):
             body=body.replace('{\n','''{
   /* Keep the real gamma screen and native exit/apply/cancel flow. Internal
      renderer choices stay as loaded; hiding a setting does not disable it. */
-  g_mem[0xbcc198u]=g_mem[0xbcc199u]=g_mem[0xbcc19au]=0;
-  g_mem[0xbcc19cu]=g_mem[0xbcc19du]=0;  g_mem[0xbcc19bu]=g_mem[0xbcc19eu]=0; /* Gamma now lives on page 1; the Configuration page is retired. */
-  if((g_mem[0xbcc178u]>=22u && g_mem[0xbcc178u]<=24u) ||
+  g_mem[0xbcc198u]=1; g_mem[0xbcc199u]=g_mem[0xbcc19au]=0; /* Extra Exit now row22; movement row21. */
+  g_mem[0xbcc19cu]=g_mem[0xbcc19du]=0;  g_mem[0xbcc19bu]=0; g_mem[0xbcc19eu]=0; /* Gamma now lives on page 1; Configuration remains retired. */
+  if((g_mem[0xbcc178u]>=23u && g_mem[0xbcc178u]<=28u) ||
      g_mem[0xbcc178u]==26u || g_mem[0xbcc178u]==27u)
-    g_mem[0xbcc178u]=g_mem[0xbcc179u]=25u;
+    g_mem[0xbcc178u]=g_mem[0xbcc179u]=21u;
 ''',1)
         elif name=='005e88b0':
             # Pause menu: the 4th entry (Inventory, reachable with Triangle anyway) opens Options (state 0xe), like the inventory's own Options button.
@@ -131,28 +149,53 @@ def replace(source):
         elif name=='005e4310':
             # Row 5 (former Vibration) is kept visible: Gamma correction takes its place (see 005e3f90).
             # Row 9 (former control type) stays visible: it is the frame-rate setting (0 = 60, 1 = 30, 2 = unlimited).
-            pass
+            needle='  W8((uint32_t)(0xbcc1a8u),(eax&0xffu));'
+            assert body.count(needle)==1
+            body=body.replace(needle,needle+'\n  sh3_movement_edit=(g_mem[0x70e66cdu]&0x80u)?0u:1u;')
         elif name=='005e4c60':
-            body='void F_005e4c60(CPU *c) { c->esp+=4; }'
+            # Reuse the signed native two-value movement widget in the Extra row21 before Exit.
+            original=re.search(r'void F_005e4e50\(CPU \*c\) \{.*?\n\}',original_source,re.S)[0]
+            assert hashlib.sha256(original.encode()).hexdigest()==SIGNATURES['005e4e50']
+            body=original.replace('void F_005e4e50(', 'void F_005e4c60(')
+            body=body.replace('0x9u','0x15u')
+            body=body.replace('R8((uint32_t)(0xbcc1a8u))','sh3_movement_edit')
+            body=body.replace('W8((uint32_t)(0xbcc1a8u),(eax&0xffu));','sh3_movement_edit=eax&1u;')
+            body=body.replace('F_0060cc90(c);','c->eax=(c->eax&0xffffff00u)|((g_mem[0x70e66cdu]&0x80u)?0u:1u); c->esp+=4u;')
+            # Only the FPS widget owns dirty bit9; merge the independent movement edit afterwards there.
+            body=body.replace('W32((uint32_t)(0xbcc1dcu),eax);','/* dirty bit merged by FPS widget */')
+            body=body.replace('{\n','{\n  sh3_movement_drawing=1;\n',1)
+            body=body.replace('  esp+=4u; c->eax=', '  sh3_movement_drawing=0;\n  esp+=4u; c->eax=')
         elif name=='005e4e50':
             # Row 9 cycles 60 -> 30 -> unlimited (value+1 modulo 3) instead of toggling two values.
             old='  { uint32_t r=(eax&0xffu)&0x1u; fr=r; cf=0; of=0; zf=(r==0);sf=(r>>7)&1u;pf=PF(r); eax=(eax&0xffffff00u)|((uint32_t)(r)&0xffu); }'
             assert body.count(old)==1
             body=body.replace(old,'  { uint32_t a=eax&0xffu; uint32_t r=(((a+1u)&0xffu)+1u)%3u; fr=r; cf=0; of=0; zf=(r==0);sf=0;pf=PF(r); eax=(eax&0xffffff00u)|r; } /* frame-rate setting: 3 values */')
+            body=body.replace('  esp+=4u; c->eax=', '  if(sh3_movement_edit!=((g_mem[0x70e66cdu]&0x80u)?0u:1u)) { uint32_t dirty=R32(0xbcc1dcu); W32(0xbcc1dcu,dirty|0x200u); }\n  esp+=4u; c->eax=')
         elif name=='0060cc80':
-            # The saved control-type byte now holds the frame-rate setting (diag_fps_mode in diag_runtime.c).
-            body='void F_0060cc80(CPU *c) { g_mem[0x70e66cdu]=g_mem[c->esp+4u]; c->eax=(c->eax&0xffffff00u)|g_mem[c->esp+4u]; c->esp+=4; }'
+            # Saved control byte: FPS in bits0..6, movement3D in bit7; native system-save path.
+            body='void F_0060cc80(CPU *c) { g_mem[0x70e66cdu]=(g_mem[c->esp+4u]&0x7fu)|(sh3_movement_edit?0u:0x80u); c->eax=(c->eax&0xffffff00u)|g_mem[c->esp+4u]; c->esp+=4; }'
+        elif name in ('005e3400','005e3480','005e3500','005e3660','005e4640','005e4f20','005e4fc0','005e5130',
+                      '005e52a0','005e53c0','005e54e0','005e5600','005e5820','005e5990','005e5ac0'):
+            pass # Native page-range changes are applied below.
         else:
-            # Options screen (callers 0x5e4000..0x5e5fff) sees the frame-rate setting; gameplay always gets Type2D (1):
-            # Valentin, 2026-11-16 after playing the PS2 original: the 2D type (the stick direction is the walking direction) is the wanted scheme.
+            # Options callers see FPS bits0..6; gameplay sees the independent native movement type.
+            # Existing saved FPS0/1/2 retain the previous forced2D behavior; bit7 opts into3D.
             body=('void F_0060cc90(CPU *c) { uint32_t ret=g_mem[c->esp]|g_mem[c->esp+1u]<<8|g_mem[c->esp+2u]<<16|(uint32_t)g_mem[c->esp+3u]<<24;\n'
-                  '  c->eax=(c->eax&0xffffff00u)|(ret>=0x5e4000u && ret<0x5e6000u ? g_mem[0x70e66cdu] : 1u); c->esp+=4; }')
+                  '  c->eax=(c->eax&0xffffff00u)|(ret>=0x5e4000u && ret<0x5e6000u ? (g_mem[0x70e66cdu]&0x7fu) : ((g_mem[0x70e66cdu]&0x80u)?0u:1u)); c->esp+=4; }')
+        # Extra grows from11..21 to11..22: keep all native options11..20,
+        # movement21 and native Exit22. No third page remains reachable.
+        # 005e3500, 005e4fc0 and 005e5130 also derive "which page is this row on" (row<=10 main, <=0x15 extra, else the retired page):
+        # left on 0x15, the Extra Exit row (now 0x16) counted as the retired page and the rows above it were not drawn.
+        if name in ('005e2e60','005e3130','005e3400','005e3480','005e3500','005e3660','005e4640','005e4f20','005e4fc0','005e5130',
+                    '005e52a0','005e53c0','005e54e0','005e5600','005e5820','005e5990','005e5ac0','005e68f0'):
+            body=body.replace('0x15u','0x16u')
         source=source[:m.start()]+body+source[m.end():]
         found+=1
-    if found not in (1,2,3,6,7,10): raise ValueError('Missing native controls/display functions')
+    expected=sum(('void F_'+fn+'(CPU *c) {') in original_source for fn in SIGNATURES)
+    if not found or found!=expected: raise ValueError('Missing native controls/display functions')
     if 'void F_005e2300(' in source:
         source='#include <stdint.h>\n#include <stdlib.h>\nextern int diag_console_display_mode(uint32_t w,uint32_t h);\n'+source
-    return source
+    return 'extern unsigned sh3_movement_edit,sh3_movement_drawing;\n'+source
 if __name__=='__main__':
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('source',type=Path);p.add_argument('output',type=Path);a=p.parse_args()
