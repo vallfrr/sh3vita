@@ -1,8 +1,7 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/logo.png">
-    <source media="(prefers-color-scheme: light)" srcset="docs/logo-dark.png">
-    <img alt="Silent Hill 3" src="docs/logo.png" width="100%">
+    <img src="docs/logo-dark.png" alt="Silent Hill 3" width="100%">
   </picture>
 </p>
 
@@ -12,9 +11,6 @@ Port of the PC version of Silent Hill 3 (2003) to the PS Vita.
 You may use your own copy of the game.
 
 **[Download the latest release](../../releases/latest)**: the VPK for the PS Vita and the data preparer for Windows, macOS and Linux.
-
-> [!WARNING]
-> This is an early test release. Read the [known limitations](#known-limitations) before playing, and save often.
 
 ## What you need
 
@@ -142,25 +138,25 @@ In the Options screen, **L** and **R** switch between the pages.
 
 ## Status
 
-The game boots, plays and saves on a real PS Vita. This is a first test release: only part of the game has been played on the console.
+The game boots, plays and saves on a real PS Vita. Every room of the game and the seven movies load and run on the console in a single session. This is a test release: the whole story has not been played from start to finish on the console yet.
 
 | Area | State |
 |:--|:--|
-| Gameplay | Menus, intro, new game, loading saves, fights, saving at save points |
-| Movies | The seven movies play at about 30 fps with their original sound |
+| Gameplay | Menus, intro, new game, loading saves, fights, save points, map, puzzles with the pointer |
+| Cutscenes and movies | Sound, music and voices work. The seven movies run at about 30fps |
 | Options | 5 languages, brightness, frame rate (60, 30 or unlimited), saved between launches |
 | Controls | Fixed layout, see [Controls](#controls) |
-| Performance | About 60% of the rooms measured run at 54–60 fps; the heaviest drop to 15–30 fps (see below) |
+| Performance | Most rooms run at 54–60fps. The heaviest hospital rooms drop to 15–30fps |
 
-More details: [docs/KNOWN-ISSUES.md](docs/KNOWN-ISSUES.md).
+Measured rooms and test limits: [docs/KNOWN-ISSUES.md](docs/KNOWN-ISSUES.md).
 
 ### Known limitations
 
-- **Sleep mode can crash the game.** Putting the Vita to sleep during play and waking it up can close the game. Save before putting the console to sleep. A fix is being tested.
-- **Heavy rooms** (parts of the hospital, the church and the amusement park entrance) can drop below 30 fps.
-- **Flashlight glow and lens flares** are not rendered. The scene stays readable and playable.
+- **Sleep mode can crash the game.** Putting the Vita to sleep during play and waking it up can close the game. Save before putting the console to sleep.
+- **Heavy rooms** (parts of the hospital basement) can drop below 30 fps.
+- **Memory is tight.** In very long sessions (an hour or more) with many area changes, the game can run out of memory. Saving regularly is recommended.
 - **"Unlimited" frame rate** makes Heather's movement uneven. Use the default **60** (or 30).
-- **Memory is tight.** In very long sessions with many area changes, the game can run out of memory. Saving regularly is recommended.
+- The **flashlight glow** and **lens flares** are not rendered. The scene stays readable and playable.
 
 ## Problems
 
@@ -171,7 +167,10 @@ More details: [docs/KNOWN-ISSUES.md](docs/KNOWN-ISSUES.md).
 | "SHADER COMPILER MISSING" | Put `libshacccg.suprx` in `ur0:data/` (install it with [ShaRKF00D](https://github.com/Rinnegatamante/ShaRKF00D)). |
 | `sh3prep` rejects the exe | Wrong game version. You need the `sh3.exe` with the SHA-256 above. |
 | Movies are choppy (about 20 fps) | They were not converted to MP4. Prepare the files again with `sh3prep` (ffmpeg is built in). |
-| Crash or the game closes | Open an issue and attach `ux0:data/sh3/diag/diag.log` and the `diag-1.log` ... `diag-10.log` files of the sessions where it happened. |
+| Crash or the game closes | Open an issue and attach the log of the affected session. After a relaunch it is normally `ux0:data/sh3/diag/diag-1.log`. |
+| Missing or corrupted textures | Usually a memory shortage after a long session. Restart the game from your last save. If it happens early, open an issue with the log and the room name. |
+
+Logs are in `ux0:data/sh3/diag/`. The current one is `diag.log`, and the 10 previous launches are kept as `diag-1.log` to `diag-10.log`, newest first.
 
 ## Build from source
 
@@ -292,10 +291,6 @@ Third-party components keep their own licenses. Their texts are in [LICENSES/](L
 - Port, recompiler, runtime and tools: [vallfrr](https://github.com/vallfrr).
 - Testing and feedback: the testers who played the game and sent their logfiles.
 - AI tools assisted the reverse engineering and the coding (Claude and Codex). Design decisions and all validation on real hardware were done by hand.
-
-**Related ports**
-- [sh4vita](https://github.com/vallfrr/sh4vita), the Silent Hill 4 port this one shares its runtime with.
-- [sh3-nx](https://github.com/cutarev/sh3-nx) (Switch), a reference port of Silent Hill 3.
 
 **Vita ecosystem**
 - [VitaSDK](https://vitasdk.org) and vita-headers.
