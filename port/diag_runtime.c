@@ -3344,7 +3344,7 @@ int main(int argc, char **argv) {
           if (sceIoGetstat(a,&st)>=0 && rename(a,b)!=0) rotated=0;
       } }
     freopen("ux0:data/sh3/diag/diag.log",rotated?"w":"a",stderr);
-    fprintf(stderr,"[session] sh3vita test build " __DATE__ " " __TIME__ "; previous sessions in diag-1.log (latest) .. diag-10.log%s\n",rotated?"":" (rotation failed: appended)");
+    fprintf(stderr,"[session] sh3vita 1.0 build " __DATE__ " " __TIME__ "; previous sessions in diag-1.log (latest) .. diag-10.log%s\n",rotated?"":" (rotation failed: appended)");
     boot_checks();
     extern int diag_tls_verify(void);
     if (diag_tls_verify()) return 5;
