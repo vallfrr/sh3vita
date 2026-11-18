@@ -140,7 +140,7 @@ In the Options screen, **L** and **R** switch between the pages.
 
 ## Status
 
-**Version 1.0.1** The game is playable from start to finish on a real PS Vita, all major and minor bugs encountered by me or the testers are now fixed.
+**Version 1.0.2** The game is playable from start to finish on a real PS Vita, all major and minor bugs encountered by me or the testers are now fixed.
 
 | Area | State |
 |:--|:--|
