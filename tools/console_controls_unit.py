@@ -92,17 +92,20 @@ def replace(source):
         elif name=='0058edb0':
             # Options left from the pause menu (return flag 2, see 005e88b0): take the native in-game path (flag 1, the
             # inventory's Options) so changed settings are written to data.sys (system save, state 0x13, return target 4),
-            # but come back to the game (state 5) instead of the inventory (state 6). Before, flag 2 went straight to
+            # but come back to the game instead of the inventory (state 6), through the return-to-game transition (state 7,
+            # F_005e1e20, also used when a menu closes): it reloads the room's message file, which Options replaces by its own
+            # in the same buffer (0xb577f0). Going straight to state 5 kept the Options texts: every prompt then showed
+            # key-configuration labels ("Turn Right", "Move Forward"), issue #1. Before, flag 2 went straight to
             # state 5 and the settings (Brightness...) were lost at the next boot (Valentin, 2026-11-16).
             old='  if ((fa!=fb)) goto L_0058f504;\n'
             assert body.count(old)==1
             body=body.replace(old,'  sh3_options_to_game=(fa==fb); goto L_0058f504; /* flag 2 = flag 1 + return to the game; set on every Options exit */\n')
             old='L_0058f486:;\n  // 0x58f486: push 6\n  { uint32_t v=0x6u; esp-=4; W32(esp,v); }'
             assert body.count(old)==1
-            body=body.replace(old,'L_0058f486:;\n  // 0x58f486: push 6 (5 when leaving pause Options unchanged)\n  { uint32_t v=sh3_options_to_game?0x5u:0x6u; sh3_options_to_game=0; esp-=4; W32(esp,v); }')
+            body=body.replace(old,'L_0058f486:;\n  // 0x58f486: push 6 (7 = return-to-game transition when leaving pause Options unchanged)\n  { uint32_t v=sh3_options_to_game?0x7u:0x6u; sh3_options_to_game=0; esp-=4; W32(esp,v); }')
             old='  // 0x58f94e: mov esi, 6\n  esi=(uint32_t)(0x6u);'
             assert body.count(old)==1
-            body=body.replace(old,'  // 0x58f94e: mov esi, 6 (5 after the system save of pause Options)\n  esi=sh3_options_to_game?0x5u:0x6u; /* re-run each frame until the save ends: no reset here */')
+            body=body.replace(old,'  // 0x58f94e: mov esi, 6 (7 after the system save of pause Options)\n  esi=sh3_options_to_game?0x7u:0x6u; /* re-run each frame until the save ends: no reset here */')
             body='static int sh3_options_to_game;\n'+body
         elif name=='0060d190':
             # Default settings of a new configuration: the film-grain effect ("Bruitage", Options Extra, byte 0x70e66cf)
