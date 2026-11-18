@@ -140,7 +140,7 @@ In the Options screen, **L** and **R** switch between the pages.
 
 ## Status
 
-**Version 1.0, the first official release.** The game boots, plays and saves on a real PS Vita. Every room of the game and every movie load and run on the console in a single session, without running out of memory. The story has not yet been played through in one go on the console: if something blocks you, open an issue with your logs.
+**Version 1.0, the first official release.** The game is playable from start to finish on a real PS Vita.
 
 | Area | State |
 |:--|:--|

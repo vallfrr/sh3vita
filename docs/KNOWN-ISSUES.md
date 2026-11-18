@@ -16,10 +16,10 @@ State of the PS Vita build, version 1.0.0, the first official release (November 
 | First launch stutters | Shaders are compiled on the console the first time they are needed. A compiled-shader cache shipped in the VPK covers many of them, and what is compiled is kept in `ux0:data/sh3/cache/`. |
 | Jagged edges | No anti-aliasing. |
 | Some options are PC-only | Resolution and display-mode rows are hidden; the single Vita resolution is used. |
-| Whole story in one playthrough | Every room of the game and the seven movies were run on the console in a single session (moving from room to room). The story events, bosses and endings have not all been played through on the console: report anything that blocks you, with your logs. |
 
 ## Confirmed on the console
 
+- The game is playable from start to finish: a tester finished it on the console.
 - Settings (brightness, frame rate, language) are kept between launches; saves and settings are written to a temporary file and renamed, so a crash during a save no longer leaves a truncated file.
 - The map fills the 16:9 screen and shows Heather's position arrow; the book puzzle fills the screen, with the game's own pointer (left stick or D-pad, Cross clicks).
 - The D-pad does the same as the left stick everywhere.
