@@ -209,6 +209,8 @@ static void texfree_lock(Texture *t) {
     }
 }
 void texfree_pin(Texture *t) { texfree_lock(t); t->tf_keep = 1; }   /* written outside Lock/Unlock: keeps its copy */
+/* The game's text writer (F_005fa730) draws glyphs into its font texture a few at a time: that texture keeps its copy. */
+#define TEXT_GLYPH_LOCK 0x5fa782u
 static void texfree_unlock(Texture *t) {
     if (!texfree_on() || t->tf_cand || t->tf_keep || t->pool != 1 || (t->usage & 1) || t->movie || t->eager) return;
     if (tf_n == tf_cap) { tf_cap = tf_cap ? tf_cap * 2 : 512; tf_list = realloc(tf_list, tf_cap * sizeof *tf_list); }
@@ -297,7 +299,7 @@ M(surf, LockRect) {
     if (self->tex) {
         Texture *t = self->tex;
         { extern int g_lockw_site; extern uint32_t g_lockw_flags; g_lockw_site = 2; g_lockw_flags = ARG(4); }
-        tex_lock_wait(t); texfree_lock(t);
+        tex_lock_wait(t); texfree_lock(t); if (R32(c->esp) == TEXT_GLYPH_LOCK) texfree_pin(t);
         uint32_t lw = t->w >> self->level ? t->w >> self->level : 1;
         STDRET(4, lock_rect(surf_mem(self), t->fmt, lw, ARG(2), ARG(3)));
     } else {
@@ -358,7 +360,7 @@ M(tex, LockRect) {
       if (logged < 12 && self->use && (int32_t)(prep_consumed_pos() - self->use) < 0) { logged++;
         rt_log("[tex-lockwait] tex %p guest %08x %ux%u fmt %u levels %u level %u rect %08x flags %08x dirty %08x pool %u usage %u caller %08x\n",
                (void *)self, self->com.guest, self->w, self->h, self->fmt, self->levels, l, ARG(4), ARG(5), self->dirty, self->pool, self->usage, R32(c->esp)); } }
-    tex_lock_wait(self); texfree_lock(self);
+    tex_lock_wait(self); texfree_lock(self); if (R32(c->esp) == TEXT_GLYPH_LOCK) texfree_pin(self);
     STDRET(5, lock_rect(surf_mem(self->lv[l]), self->fmt, w ? w : 1, ARG(3), ARG(4)));
 }
 M(tex, UnlockRect) {
