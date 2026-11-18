@@ -34,4 +34,4 @@ State of the PS Vita build, version 0.1.0 (November 2026). "Console" means seen 
 
 - **Executable:** only the `sh3.exe` listed in the README works: the recompiled code depends on it byte for byte.
 - **Logs:** `ux0:data/sh3/diag/diag.log` (current session) and `diag-1.log` ... `diag-10.log` (the 10 previous ones, `diag-1` is the latest). Include them when reporting a problem.
-- **Updating:** install the new VPK over the old one; keep `ux0:data/sh3/`.
+- **Updating:** install the new VPK over the old one; keep `ux0:data/sh3/`. The application ID is `SILHIL003` (earlier test versions used `SILH00003`: delete that old bubble, your saves stay in `ux0:data/sh3/`).

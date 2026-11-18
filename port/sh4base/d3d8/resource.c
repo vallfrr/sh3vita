@@ -193,6 +193,55 @@ static uint32_t lock_rect(uint32_t mem, uint32_t fmt, uint32_t w, uint32_t locke
     return HR_OK;
 }
 void surf_readback(Surface *s);
+/* Free-after-upload of guest texture copies (default since 2026-11-18, SH3_TEXFREE=0 disables). Console sweep of the 266
+ * rooms + 7 movies: texture copies 54 -> 33 MB, heap allocation failures 33 -> 0, one relock (title), captures unchanged. A managed texture keeps a
+ * copy of every level in the game heap (55-59 MB from the hospital on, 2026-11-18 sweeps), which is only read again to
+ * upload it after a Lock. Once the game has left it unlocked for two presents, nothing is dirty and the renderer has
+ * replayed every record that used it, the copies are returned to the heap (game thread, at Present). A later Lock gets
+ * a zeroed copy: logged, and the texture is never released again. Render targets, movies and eager textures excluded. */
+static Texture **tf_list; static unsigned tf_n, tf_cap, tf_presents, tf_relocks, tf_count; static uint64_t tf_bytes;
+static int texfree_on(void) { static int v = -1; if (v < 0) { const char *e = getenv("SH3_TEXFREE"); v = !e || strcmp(e, "0"); } return v; }
+static void texfree_lock(Texture *t) {
+    t->tf_locks++;
+    if (t->tf_freed) {
+        t->tf_freed = 0; t->tf_keep = 1;
+        if (tf_relocks++ < 32) rt_log("[texfree] relock after release: %ux%u fmt=%u levels=%u (kept from now on)\n", t->w, t->h, t->fmt, t->levels);
+    }
+}
+void texfree_pin(Texture *t) { texfree_lock(t); t->tf_keep = 1; }   /* written outside Lock/Unlock: keeps its copy */
+static void texfree_unlock(Texture *t) {
+    if (!texfree_on() || t->tf_cand || t->tf_keep || t->pool != 1 || (t->usage & 1) || t->movie || t->eager) return;
+    if (tf_n == tf_cap) { tf_cap = tf_cap ? tf_cap * 2 : 512; tf_list = realloc(tf_list, tf_cap * sizeof *tf_list); }
+    tf_list[tf_n++] = t; t->tf_cand = 1; t->tf_seen = t->tf_locks; t->tf_since = tf_presents;
+}
+static void texfree_forget(Texture *t) {
+    if (!t->tf_cand) return;
+    for (unsigned i = 0; i < tf_n; i++) if (tf_list[i] == t) { tf_list[i] = tf_list[--tf_n]; break; }
+    t->tf_cand = 0;
+}
+void texfree_present(void) {
+    tf_presents++;
+    extern uint32_t prep_consumed_pos(void);
+    for (unsigned i = 0; i < tf_n;) {
+        Texture *t = tf_list[i];
+        if (t->tf_keep) { t->tf_cand = 0; tf_list[i] = tf_list[--tf_n]; continue; }
+        if (t->tf_locks != t->tf_seen) { t->tf_seen = t->tf_locks; t->tf_since = tf_presents; i++; continue; }
+        if (tf_presents - t->tf_since < 2 || __atomic_load_n(&t->dirty, __ATOMIC_ACQUIRE) || !t->gl || t->movie || t->eager ||
+            (t->use && (int32_t)(prep_consumed_pos() - t->use) < 0)) { i++; continue; }
+        uint64_t bytes = 0;
+        for (uint32_t l = 0; l < t->levels; l++) {
+            Surface *s = t->lv[l];
+            if (!s->mem || s->pending) continue;
+            uint32_t size = fmt_level_size(s->fmt, s->w, s->h);
+            gheap_free(s->mem); s->mem = 0; g_mem_tex -= size; bytes += size;
+        }
+        t->tf_freed = 1; t->tf_cand = 0; tf_list[i] = tf_list[--tf_n];
+        tf_bytes += bytes;
+        if (++tf_count <= 3 || tf_count % 500 == 0)
+            rt_log("[texfree] released %ux%u fmt=%u (%llu KB); %u textures, %llu KB in total, %u relocks\n", t->w, t->h, t->fmt,
+                   (unsigned long long)(bytes >> 10), tf_count, (unsigned long long)(tf_bytes >> 10), tf_relocks);
+    }
+}
 /* Ordered texture uploads (exact, removes a per-frame wait of the game thread on the renderer).
  * Default: Unlock sets a dirty bit and the renderer uploads from guest memory when it binds the texture, so a later Lock
  * must wait until every recorded draw that reads the texture has run (prep_wait_use). A texture that the game relocks
@@ -229,6 +278,7 @@ static void tex_lock_wait(Texture *t) {
     }
 }
 static void tex_unlock_level(Texture *t, uint32_t level) {
+    texfree_unlock(t);
     if (t->eager && level == 0 && tex_eager_ok(t)) {
         uint32_t n = fmt_level_size(t->fmt, t->w, t->h);
         TexSnap *s = malloc(sizeof(TexSnap) + n);
@@ -247,7 +297,7 @@ M(surf, LockRect) {
     if (self->tex) {
         Texture *t = self->tex;
         { extern int g_lockw_site; extern uint32_t g_lockw_flags; g_lockw_site = 2; g_lockw_flags = ARG(4); }
-        tex_lock_wait(t);
+        tex_lock_wait(t); texfree_lock(t);
         uint32_t lw = t->w >> self->level ? t->w >> self->level : 1;
         STDRET(4, lock_rect(surf_mem(self), t->fmt, lw, ARG(2), ARG(3)));
     } else {
@@ -308,7 +358,7 @@ M(tex, LockRect) {
       if (logged < 12 && self->use && (int32_t)(prep_consumed_pos() - self->use) < 0) { logged++;
         rt_log("[tex-lockwait] tex %p guest %08x %ux%u fmt %u levels %u level %u rect %08x flags %08x dirty %08x pool %u usage %u caller %08x\n",
                (void *)self, self->com.guest, self->w, self->h, self->fmt, self->levels, l, ARG(4), ARG(5), self->dirty, self->pool, self->usage, R32(c->esp)); } }
-    tex_lock_wait(self);
+    tex_lock_wait(self); texfree_lock(self);
     STDRET(5, lock_rect(surf_mem(self->lv[l]), self->fmt, w ? w : 1, ARG(3), ARG(4)));
 }
 M(tex, UnlockRect) {
@@ -319,6 +369,7 @@ M(tex, UnlockRect) {
 // The game writes the movie frame through the LockRect pointer and only signals AddDirtyRect (never UnlockRect).
 M(tex, AddDirtyRect) {
     HOSTFN; THIS(Texture, K_TEXTURE);
+    texfree_pin(self);
     if (self->eager) { prep_wait_use(self->use); self->eager = 0; }   /* writes outside Lock/Unlock: back to the lazy path */
     __atomic_store_n(&self->dirty, 0xffffffffu, __ATOMIC_RELAXED); STDRET(2, HR_OK); }
 const gfn tex_vt[] = {tex_QueryInterface, surf_AddRef, surf_Release, surf_GetDevice, surf_SetPrivateData,
@@ -846,6 +897,7 @@ void d3d_release(ComObj *o) {
         if (g_dev)
             for (int s = 0; s < MAX_STAGES; s++)
                 if (g_dev->tex[s] == t) return; // still bound (should not happen: SetTexture does AddRef)
+        texfree_forget(t);
         prep_free(K_TEXTURE, t);
         break;
     }

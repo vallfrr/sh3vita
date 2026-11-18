@@ -3521,6 +3521,7 @@ int main(int argc, char **argv) {
     } }
 #endif
     { FILE *rtt=fopen("ux0:data/sh3/diag/rttrace","rb"); if (rtt) { fclose(rtt); unlink("ux0:data/sh3/diag/rttrace"); setenv("SH3_RTTRACE","1",1); fprintf(stderr,"[diag] render-target trace enabled\n"); } }
+    { FILE *tf=fopen("ux0:data/sh3/diag/texfree","rb"); if (tf) { fclose(tf); unlink("ux0:data/sh3/diag/texfree"); setenv("SH3_TEXFREE","1",1); fprintf(stderr,"[diag] texture copies released after upload (texfree)\n"); } }
     if (unlink("ux0:data/sh3/diag/privatedepth")==0) {
         setenv("SH3_PRIVATE_DEPTH_DISCARD","1",1);
         fprintf(stderr,"[diag] private framebuffer depth discard requested\n");

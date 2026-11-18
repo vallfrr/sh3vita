@@ -46,7 +46,7 @@ From Linux or WSL with VitaSDK (`VITASDK=~/vitasdk`), CMake and Ninja:
 SH3_VITAGL_DIR=~/src/vitaGL bash port/build.sh
 ```
 
-The result is `build/sh3vita.vpk` (title ID `SILH00003`). The build runs outside the source tree
+The result is `build/sh3vita.vpk` (title ID `SILHIL003`). The build runs outside the source tree
 (`~/build/sh3vita`) because compiling on a Windows drive from WSL is slow.
 
 Optional local bundles derived from the game (never committed) can be packed into the VPK if present:

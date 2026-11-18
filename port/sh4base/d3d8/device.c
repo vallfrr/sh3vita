@@ -134,6 +134,7 @@ M(Reset) { HOSTFN; DEV;
     rt_log("[d3d8] Reset %ux%u\n", R32(ARG(2)), R32(ARG(2) + 4)); prep_gfx_init(); STDRET(2, HR_OK); }
 M(Present) {
     HOSTFN; DEV;
+    { extern void texfree_present(void); texfree_present(); }
     if (g_t_begin) g_t_body += SDL_GetPerformanceCounter() - g_t_begin;
     g_t_begin = 0;
     fadeseq_present();

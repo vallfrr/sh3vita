@@ -178,7 +178,7 @@ void plat_gl_init(void) {
 #ifdef SH3_MOVIE_HW_LAB
     /* vglInitExtended takes all phycont/cdram; the AvPlayer hardware decoder then cannot allocate its frame
        buffers (v4: no frame, no audio after 15 s). Lab only: leave 8 MB phycont + 32 MB cdram free, the values
-       console-tested by another SH3 Vita port (vitaGL video_playback sample does the same). cdlg 0x8C6000
+       the vitaGL video_playback sample uses. cdlg 0x8C6000
        keeps the common-dialog budget exactly like vglInitExtended. */
     /* cdram threshold 0: vitaGL keeps all CDRAM, as vglInitExtended (a 32 MB reserve was suspected of the
        <15 FPS gameplay regression; benches v5-v9 show AvPlayer using only 2+5+1 MB of phycont for 512x384). */

@@ -74,6 +74,8 @@ struct Texture {
     int stg_alloc;         // movie (Vita): GL 565 storage exists (565 frames come from movie_565_take)
     uint32_t use;          // ring position (prep.c) of the last record that reads/writes this texture
     int eager;             // ordered uploads: each Unlock queues a copy of the level (resource.c, tex_eager_*)
+    unsigned tf_locks, tf_seen, tf_since;   // free-after-upload of the guest copies (resource.c, texfree_*)
+    uint8_t tf_cand, tf_freed, tf_keep;
 };
 extern int g_movie_w, g_movie_h;
 uint16_t *movie_565_take(uint32_t w, uint32_t h, volatile int **busy);   // movie.c (Vita)

@@ -808,10 +808,10 @@ static GLenum cmp_of(uint32_t f) {
 static GLenum sop_of(uint32_t o) {
     // D3DSTENCILOP: 1 KEEP 2 ZERO 3 REPLACE 4 INCRSAT 5 DECRSAT 6 INVERT 7 INCR (wraps) 8 DECR (wraps).
     // 7/8 used to map to the saturating GL_INCR/GL_DECR, which breaks stencil-counted shadow/light volumes
-    // (the game counts with INCR/DECR on every volume face; cross-checked against another SH3 port, 2026-11-16).
+    // (the game counts with INCR/DECR on every volume face).
     static const GLenum sat[] = {GL_KEEP, GL_KEEP, GL_ZERO, GL_REPLACE, GL_INCR, GL_DECR, GL_INVERT, GL_INCR, GL_DECR};
     static const GLenum wrap[] = {GL_KEEP, GL_KEEP, GL_ZERO, GL_REPLACE, GL_INCR, GL_DECR, GL_INVERT, GL_INCR_WRAP, GL_DECR_WRAP};
-    // Candidate (not yet tested on the console): wrapping INCR/DECR, as the sibling port does. Opt in with SH3_STENCIL_WRAP=1.
+    // Candidate (not yet tested on the console): wrapping INCR/DECR. Opt in with SH3_STENCIL_WRAP=1.
     static int use_wrap = -1; if (use_wrap < 0) use_wrap = getenv("SH3_STENCIL_WRAP") != NULL;
     const GLenum *t = use_wrap ? wrap : sat;
     return o < 9 ? t[o] : GL_KEEP;
@@ -2085,6 +2085,8 @@ void surf_copy_rects(Surface *src, uint32_t rects, uint32_t n, Surface *dst, uin
         g_t_copy += SDL_GetPerformanceCounter() - t_cp;
         return;
     }
+    if (dst->tex) { extern void texfree_pin(Texture *); texfree_pin(dst->tex); }
+    if (src->tex && !src->mem) d3d_log_once("CopyRects: source texture copy released (texfree)");
     if (dst->tex) { extern int g_lockw_site; extern uint32_t g_lockw_flags; g_lockw_site = 3; g_lockw_flags = 0; prep_wait_use(dst->tex->use); }   // the consumer may still read the destination's memory
     for (uint32_t i = 0; i < n; i++) {
         int32_t x = 0, y = 0, w = (int32_t)src->w, h = (int32_t)src->h, dx, dy;
