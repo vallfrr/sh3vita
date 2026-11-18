@@ -15,7 +15,7 @@ You may use your own copy of the game.
 ## What you need
 
 - A hacked PS Vita (HENkaku/Enso), at least 6 GB free on `ux0:`
-- Silent Hill 3 for PC, with this exact executable: `sh3.exe`, 3,338,240 bytes, SHA-256 `a51f956bd5be21fd704c4d19cf0674a175d002081da43b1d377be83226c36e5e`. No other version works (no PS2 files either).
+- Silent Hill 3 for PC can be found on myabandonware, US version needed with the five zip files), with this exact executable: `sh3.exe`, 3,338,240 bytes, SHA-256 `a51f956bd5be21fd704c4d19cf0674a175d002081da43b1d377be83226c36e5e`. No other version works (no PS2 files either).
 - `ur0:data/libshacccg.suprx` from your own Vita (ShaRKF00D).
 - `sh3vita.vpk` and the `sh3prep` download for your computer from the [Releases](../../releases) page
 
@@ -138,7 +138,7 @@ In the Options screen, **L** and **R** switch between the pages.
 
 ## Status
 
-The game boots, plays and saves on a real PS Vita. Every room of the game and the seven movies load and run on the console in a single session. This is a test release: the whole story has not been played from start to finish on the console yet.
+The game boots, plays and saves on a real PS Vita. Every room of the game and the movies load and run on the console in a single session. This is a test release: the whole story has not been played from start to finish on the console yet.
 
 | Area | State |
 |:--|:--|
@@ -152,7 +152,6 @@ Measured rooms and test limits: [docs/KNOWN-ISSUES.md](docs/KNOWN-ISSUES.md).
 
 ### Known limitations
 
-- **Sleep mode can crash the game.** Putting the Vita to sleep during play and waking it up can close the game. Save before putting the console to sleep.
 - **Heavy rooms** (parts of the hospital basement) can drop below 30 fps.
 - **Memory is tight.** In very long sessions (an hour or more) with many area changes, the game can run out of memory. Saving regularly is recommended.
 - **"Unlimited" frame rate** makes Heather's movement uneven. Use the default **60** (or 30).
