@@ -424,7 +424,26 @@ M(LightEnable) { STDRET(3, HR_OK); }
 M(GetLightEnable) { HOSTFN; W32(ARG(3), 0); STDRET(3, HR_OK); }
 M(SetClipPlane) { STDRET(3, HR_OK); }
 M(GetClipPlane) { STDRET(3, HR_OK); }
-M(SetRenderState) { HOSTFN; DEV; if (ARG(2) < 256) { uint32_t v = ARG(3); prep_set(&d->rs[ARG(2)], &v, 4); } STDRET(3, HR_OK); }
+/* Begin/End blocks own just the scalar states written while recording. */
+typedef struct {
+    unsigned char rs[256], vsc[MAX_VSC], vs, ps;
+} RecordedFields;
+static RecordedFields pending_fields;
+static uint32_t pending_rs[256], pending_vs, pending_ps;
+static float pending_vsc[MAX_VSC][4];
+static int recording;
+
+static void put_render_state(Device *d, unsigned state, uint32_t value) {
+    if (state >= 256) return;
+    if (recording) {
+        pending_fields.rs[state] = 1;
+        pending_rs[state] = value;
+    } else {
+        prep_set(&d->rs[state], &value, sizeof value);
+    }
+}
+
+M(SetRenderState) { HOSTFN; DEV; put_render_state(d, ARG(2), ARG(3)); STDRET(3, HR_OK); }
 #ifdef SH3_RENDERSTATE_LAB
 uint32_t g_diag_renderstate_target;
 /* Same state write and prep recording as the COM method above. The caller
@@ -433,7 +452,7 @@ uint32_t g_diag_renderstate_target;
 int diag_d3d_renderstate(uint32_t object,uint32_t state,uint32_t value) {
     Device *d=com_get_kind(object,K_DEVICE);
     if (!d) return 0;
-    if (state<256) prep_set(&d->rs[state],&value,4);
+    put_render_state(d, state, value);
     return 1;
 }
 #endif
@@ -448,9 +467,9 @@ typedef struct {
     float vsc[MAX_VSC][4];
     Texture *tex[MAX_STAGES];ComObj *cube[MAX_STAGES];uint32_t texmask;
     uint32_t tssmask[MAX_STAGES];
+    RecordedFields fields;
 } StateBlock;
 static StateBlock *blocks[256];
-static int recording;
 static Texture *record_tex[MAX_STAGES];
 static ComObj *record_cube[MAX_STAGES];
 static uint32_t record_texmask;
@@ -488,6 +507,7 @@ static uint32_t sb_new(Device *d) {
 }
 M(BeginStateBlock) {
     if(recording)STDRET(1,D3DERR_INVALIDCALL);
+    memset(&pending_fields, 0, sizeof pending_fields);
     recording=1;record_texmask=0;memset(record_tssmask,0,sizeof record_tssmask);d3d_log_once("BeginStateBlock");STDRET(1,HR_OK);
 }
 M(EndStateBlock) {
@@ -496,6 +516,11 @@ M(EndStateBlock) {
     uint32_t id=sb_new(d);recording=0;
     if(id){
         StateBlock *b=blocks[id];b->texmask=record_texmask;
+        b->fields = pending_fields;
+        memcpy(b->rs, pending_rs, sizeof b->rs);
+        memcpy(b->vsc, pending_vsc, sizeof b->vsc);
+        b->vs = pending_vs;
+        b->ps = pending_ps;
         memcpy(b->tss,record_tss,sizeof b->tss);memcpy(b->tssmask,record_tssmask,sizeof b->tssmask);
         memcpy(b->tex,record_tex,sizeof record_tex);memcpy(b->cube,record_cube,sizeof record_cube);
         memset(record_tex,0,sizeof record_tex);memset(record_cube,0,sizeof record_cube);
@@ -503,21 +528,39 @@ M(EndStateBlock) {
     }else for(unsigned i=0;i<MAX_STAGES;i++)sb_store_texture(&record_tex[i],&record_cube[i],NULL,NULL);
     record_texmask=0;W32(ARG(2),id);STDRET(2,id?HR_OK:0x8007000eu);
 }
+/* Contiguous runs keep full snapshots at one prep command per array. */
+static void transfer_fields(void *device, void *block, const unsigned char *mask,
+                            unsigned count, size_t stride, int apply) {
+    for (unsigned i = 0; i < count;) {
+        if (!mask[i]) { ++i; continue; }
+        unsigned first = i++;
+        while (i < count && mask[i]) ++i;
+        unsigned char *live = (unsigned char *)device + first * stride;
+        unsigned char *saved = (unsigned char *)block + first * stride;
+        size_t bytes = (i - first) * stride;
+        if (apply) prep_set(live, saved, bytes);
+        else memcpy(saved, live, bytes);
+    }
+}
 M(ApplyStateBlock) {
     HOSTFN;DEV;StateBlock *b=ARG(2)<256?blocks[ARG(2)]:NULL;
     if(!b)STDRET(2,D3DERR_INVALIDCALL);
-    prep_set(d->rs,b->rs,sizeof d->rs);
+    transfer_fields(d->rs, b->rs, b->fields.rs, 256, sizeof d->rs[0], 1);
     for(unsigned i=0;i<MAX_STAGES;i++)for(unsigned k=0;k<32;k++)if(b->tssmask[i]&(1u<<k))prep_set(&d->tss[i][k],&b->tss[i][k],4);
-    prep_set(d->vsc,b->vsc,sizeof d->vsc);PSET(vs,b->vs);PSET(ps,b->ps);
+    transfer_fields(d->vsc, b->vsc, b->fields.vsc, MAX_VSC, sizeof d->vsc[0], 1);
+    if (b->fields.vs) { PSET(vs,b->vs); }
+    if (b->fields.ps) { PSET(ps,b->ps); }
     for(unsigned i=0;i<MAX_STAGES;i++)if(b->texmask&(1u<<i))device_bind_texture(d,i,b->tex[i],b->cube[i]);
     STDRET(2,HR_OK);
 }
 M(CaptureStateBlock) {
     HOSTFN;DEV;StateBlock *b=ARG(2)<256?blocks[ARG(2)]:NULL;
     if(!b)STDRET(2,D3DERR_INVALIDCALL);
-    memcpy(b->rs,d->rs,sizeof d->rs);
+    transfer_fields(d->rs, b->rs, b->fields.rs, 256, sizeof d->rs[0], 0);
     for(unsigned i=0;i<MAX_STAGES;i++)for(unsigned k=0;k<32;k++)if(b->tssmask[i]&(1u<<k))b->tss[i][k]=d->tss[i][k];
-    memcpy(b->vsc,d->vsc,sizeof d->vsc);b->vs=d->vs;b->ps=d->ps;
+    transfer_fields(d->vsc, b->vsc, b->fields.vsc, MAX_VSC, sizeof d->vsc[0], 0);
+    if (b->fields.vs) b->vs=d->vs;
+    if (b->fields.ps) b->ps=d->ps;
     sb_capture_textures(b,d);STDRET(2,HR_OK);
 }
 M(DeleteStateBlock) {
@@ -526,7 +569,8 @@ M(DeleteStateBlock) {
 }
 M(CreateStateBlock) {
     HOSTFN;DEV;uint32_t type=ARG(2);if(type<1 || type>3)STDRET(3,D3DERR_INVALIDCALL);
-    uint32_t id=sb_new(d);if(id){blocks[id]->texmask=type==3?0:((1u<<MAX_STAGES)-1);for(unsigned i=0;i<MAX_STAGES;i++)blocks[id]->tssmask[i]=0xffffffffu;sb_capture_textures(blocks[id],d);}
+    uint32_t id=sb_new(d);if(id){memset(&blocks[id]->fields, 1, sizeof blocks[id]->fields); /* preserve existing CreateStateBlock coverage */
+        blocks[id]->texmask=type==3?0:((1u<<MAX_STAGES)-1);for(unsigned i=0;i<MAX_STAGES;i++)blocks[id]->tssmask[i]=0xffffffffu;sb_capture_textures(blocks[id],d);}
     W32(ARG(3),id);STDRET(3,id?HR_OK:0x8007000eu);
 }
 M(SetClipStatus) { STDRET(2, HR_OK); }
@@ -805,14 +849,21 @@ M(CreateVertexShader) {
     W32(ARG(4), h);
     STDRET(5, h ? HR_OK : D3DERR_INVALIDCALL);
 }
-M(SetVertexShader) { HOSTFN; DEV; PSET(vs, ARG(2)); STDRET(2, HR_OK); }
+M(SetVertexShader) { HOSTFN; DEV;
+    if (recording) { pending_fields.vs=1; pending_vs=ARG(2); }
+    else { PSET(vs, ARG(2)); } STDRET(2, HR_OK); }
 M(GetVertexShader) { HOSTFN; DEV; W32(ARG(2), d->vs); STDRET(2, HR_OK); }
 M(DeleteVertexShader) { HOSTFN; prep_vsdel(ARG(2)); STDRET(2, HR_OK); }
 M(SetVertexShaderConstant) {
     HOSTFN; DEV;
     uint32_t r = ARG(2), n = ARG(4);
     if (r + n > MAX_VSC) n = r < MAX_VSC ? MAX_VSC - r : 0;
-    if (n) prep_set(d->vsc[r], mb + ARG(3), 16u * n);
+    if (r >= MAX_VSC) n = 0;
+    else if (n > MAX_VSC-r) n = MAX_VSC-r;
+    if (n && recording) {
+        memset(pending_fields.vsc+r, 1, n);
+        memcpy(pending_vsc[r], mb + ARG(3), 16u*n);
+    } else if (n) prep_set(d->vsc[r], mb + ARG(3), 16u*n);
     STDRET(4, HR_OK);
 }
 
@@ -826,7 +877,7 @@ int d3d_model_palette(CPU *c) {
         const char *s = getenv("SH4_NATIVE_PALETTE");
         enabled = s && !strcmp(s, "1");
     }
-    if (!enabled) return 0;
+    if (!enabled || recording) return 0; /* replay original individual constant writes */
     uint8_t *const mb = g_mem;
     uint32_t guest = R32(0x6e7d94u);
     Device *d = g_dev;
@@ -909,7 +960,9 @@ M(CreatePixelShader) {
     W32(ARG(3), h);
     STDRET(3, h ? HR_OK : D3DERR_INVALIDCALL);
 }
-M(SetPixelShader) { HOSTFN; DEV; PSET(ps, ARG(2)); STDRET(2, HR_OK); }
+M(SetPixelShader) { HOSTFN; DEV;
+    if (recording) { pending_fields.ps=1; pending_ps=ARG(2); }
+    else { PSET(ps, ARG(2)); } STDRET(2, HR_OK); }
 M(GetPixelShader) { HOSTFN; DEV; W32(ARG(2), d->ps); STDRET(2, HR_OK); }
 M(DeletePixelShader) { HOSTFN; prep_psdel(ARG(2)); STDRET(2, HR_OK); }
 M(SetPixelShaderConstant) {

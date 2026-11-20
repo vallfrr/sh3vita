@@ -28,6 +28,8 @@ static int prep_set(void *dst,const void *src,size_t n){if(!memcmp(dst,src,n))re
 #define DEV Device *d=com_get_kind(ARG(1),K_DEVICE);if(!d)abort()
 #define STDRET(n,v) do{c->eax=(v);c->esp+=4u+4u*(n);return;}while(0)
 #define HR_OK 0
+static int recording;static struct{unsigned char rs[256];} pending_fields;static uint32_t pending_rs[256];
+static void put_render_state(Device *d, unsigned state, uint32_t value) @PUT@
 static void native_com(CPU *c) @METHOD@
 int diag_d3d_renderstate(uint32_t object,uint32_t state,uint32_t value) @HELPER@
 static int diag_renderstate_shortcut(CPU*c,uint32_t target,uint32_t object,uint32_t state,uint32_t value){(void)c;return allow && target==g_diag_renderstate_target && diag_d3d_renderstate(object,state,value);}
@@ -58,7 +60,7 @@ def main():
  changed=transform(fake)[0];replacement=changed[changed.index(original[:30]):changed.rindex('\n}')]
  start='uint8_t *const mb=g_mem;uint32_t eax=c->eax,ecx=c->ecx,edx=c->edx,ebx=c->ebx,esp=c->esp,ebp=c->ebp,esi=c->esi,edi=c->edi,ft0=c->ftop;'
  end='c->eax=eax;c->ecx=ecx;c->edx=edx;c->ebx=ebx;c->esp=esp;c->ebp=ebp;c->esi=esi;c->edi=edi;c->ftop=ft0;'
- output=TEMPLATE.replace('@METHOD@',body(ROOT/'port/sh4base/d3d8/device.c','M(SetRenderState)')).replace('@HELPER@',body(ROOT/'port/sh4base/d3d8/device.c','int diag_d3d_renderstate('))
+ output=TEMPLATE.replace('@PUT@',body(ROOT/'port/sh4base/d3d8/device.c','static void put_render_state(')).replace('@METHOD@',body(ROOT/'port/sh4base/d3d8/device.c','M(SetRenderState)')).replace('@HELPER@',body(ROOT/'port/sh4base/d3d8/device.c','int diag_d3d_renderstate('))
  output=output.replace('@REFERENCE@','static void reference(CPU*c){'+start+original+end+'}').replace('@CANDIDATE@','static void candidate(CPU*c){'+start+replacement+end+'}')
  a.out.mkdir(parents=True,exist_ok=True);c=a.out/'test.c';exe=a.out/'test';c.write_text(output)
  subprocess.run([a.cc,'-O2','-fsanitize=address,undefined','-I'+str(ROOT/'port/include'),str(c),'-o',str(exe),'-lm'],check=True)
