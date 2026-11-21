@@ -373,6 +373,8 @@ add_executable(sh3pc_diag ${SH3_GEN} ${SH3_D3D} ${IMPORTS}
   diag_runtime.c diag_bench_input.c diag_tls.c diag_lens_query.c diag_widescreen.c diag_widescreen_hook.c diag_heap.c diag_taskmem.c diag_sync.c diag_event.c diag_thread.c pe_image.c
   diag_cube.c vita_paths.c vita_diag_platform.c sh4base/rt/cputime.c sh4base/dx/dinput.c sh4base/dx/dsound.c
   third_party/tlsf/tlsf.c diag_prof.c d3dx_asm_cache.c)
+target_sources(sh3pc_diag PRIVATE hospital_filter.c)
+target_link_options(sh3pc_diag PRIVATE "LINKER:--wrap,F_0041e200")
 if(SH3_RENDERSTATE_LAB)
   target_compile_definitions(sh3pc_diag PRIVATE SH3_RENDERSTATE_LAB=1)
 endif()
@@ -531,9 +533,9 @@ target_link_options(sh3pc_diag PRIVATE "LINKER:--wrap,F_005ef950")
 # optional probes. Keep both sides of these interposition boundaries native.
 # B7 disassembly demonstrated F_00419920 calling F_0041b2c0 directly with IPO.
 if(CMAKE_INTERPROCEDURAL_OPTIMIZATION)
-  set(SH3_WRAP_BOUNDARIES diag_runtime.c diag_lens_query.c)
+  set(SH3_WRAP_BOUNDARIES diag_runtime.c diag_lens_query.c hospital_filter.c)
   foreach(unit IN LISTS SH3_GEN)
-    if(unit MATCHES "x86_f(008|137|181|151)\\.c$" OR unit STREQUAL SH3_WORKER_UNIT)
+    if(unit MATCHES "x86_f(008|009|010|137|181|151)\\.c$" OR unit STREQUAL SH3_WORKER_UNIT)
       list(APPEND SH3_WRAP_BOUNDARIES "${unit}")
     endif()
   endforeach()
