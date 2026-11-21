@@ -570,7 +570,7 @@ endforeach()
 if(NOT VITA_MKSFOEX_FLAGS MATCHES "ATTRIBUTE2")
   set(VITA_MKSFOEX_FLAGS "${VITA_MKSFOEX_FLAGS} -d ATTRIBUTE2=12")
 endif()
-vita_create_vpk(sh3vita.vpk SILHIL003 eboot.bin VERSION 01.02 NAME "${SH3_APP_NAME}"
+vita_create_vpk(sh3vita.vpk SILHIL003 eboot.bin VERSION 01.03 NAME "${SH3_APP_NAME}"
   ${SH3_VPK_EXTRA}
   FILE "${CMAKE_CURRENT_SOURCE_DIR}/livearea/icon0.png" sce_sys/icon0.png
   FILE "${CMAKE_CURRENT_SOURCE_DIR}/livearea/bg.png" sce_sys/livearea/contents/bg.png

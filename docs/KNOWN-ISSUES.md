@@ -1,6 +1,6 @@
 # Known issues
 
-State of the PS Vita build, version 1.0.2 (November 2026). "Console" means seen on a real PS Vita.
+State of the PS Vita build, version 1.0.3 (November 2026). "Console" means seen on a real PS Vita.
 
 ## Open
 
@@ -27,6 +27,7 @@ State of the PS Vita build, version 1.0.2 (November 2026). "Console" means seen 
 - Bloody footprints stay on the floor when the camera moves and no longer blink (1.0.2).
 - Options > Extra has a Movement row, 2D (default) or 3D, the game's own tank controls (1.0.2).
 - The inventory screen has black sides in every room (1.0.2).
+- The red Halo of the Sun seal is drawn on the save-point mirrors, including the first bathroom after the Douglas cutscene (1.0.3).
 - All 266 rooms and the seven movies run in a single session (three full runs, 2026-11-18), with no allocation failure since the texture copies are released after upload.
 - Boot, title menu, options (including gamma), new game, saving and loading.
 - The seven movies at 30 fps with the converted MP4 files.
